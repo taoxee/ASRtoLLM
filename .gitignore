@@ -12,3 +12,4 @@ Thumbs.db
 *.log
 output/
 vendor_creds.json
+static/tmp/

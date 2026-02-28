@@ -871,45 +871,95 @@ def transcribe_xfyun(creds, filepath):
     raise Exception("讯飞 ASR 超时，请稍后重试")
 
 
+
 def transcribe_aliyun(creds, filepath):
-    """阿里云 ASR via DashScope Paraformer HTTP API (no SDK needed).
-    Uses async file transcription: submit task → poll → get result."""
+    """阿里云 ASR via DashScope Paraformer REST API.
+    DashScope only accepts file_urls (no direct upload/base64).
+    Strategy: serve the file temporarily via the Flask app, then pass the URL."""
     import time as _time
-    import base64
 
     api_key = creds.get("api_key", "")
-    base_url = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
     }
 
-    # Read and base64-encode the audio file
-    with open(filepath, "rb") as f:
-        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+    # Copy file to static/tmp/ so Flask can serve it
+    tmp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_name = uuid.uuid4().hex + "_" + os.path.basename(filepath)
+    tmp_path = os.path.join(tmp_dir, tmp_name)
+    import shutil
+    shutil.copy2(filepath, tmp_path)
 
-    ext = os.path.splitext(filepath)[1].lower().lstrip(".")
-    format_map = {"mp3": "mp3", "wav": "wav", "m4a": "m4a", "mp4": "mp4",
-                  "ogg": "ogg", "flac": "flac", "webm": "opus"}
-    audio_format = format_map.get(ext, "mp3")
+    # Build a publicly accessible URL — user must ensure the server is reachable
+    # For local dev, this won't work with DashScope (needs public URL)
+    # So we also try the oss:// upload credential approach
+    try:
+        # Step 1: Try to get an upload credential from DashScope
+        cred_resp = http.get(
+            "https://dashscope.aliyuncs.com/api/v1/uploads",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"action": "getPolicy", "model": "paraformer-v2"},
+            timeout=30,
+        )
+        cred_resp.raise_for_status()
+        cred_data = cred_resp.json().get("data", {})
+        oss_access_key_id = cred_data.get("oss_access_key_id", "")
+        policy = cred_data.get("policy", "")
+        signature = cred_data.get("signature", "")
+        upload_dir = cred_data.get("upload_dir", "")
+        upload_host = cred_data.get("upload_host", "")
+        x_oss_object_acl = cred_data.get("x_oss_object_acl", "")
+        x_oss_forbid_overwrite = cred_data.get("x_oss_forbid_overwrite", "")
 
-    # Step 1: Submit transcription task
+        if upload_host and policy:
+            # Step 2: Upload file to DashScope OSS
+            oss_key = f"{upload_dir}/{tmp_name}"
+            with open(filepath, "rb") as f:
+                upload_resp = http.post(
+                    upload_host,
+                    data={
+                        "OSSAccessKeyId": oss_access_key_id,
+                        "policy": policy,
+                        "Signature": signature,
+                        "key": oss_key,
+                        "x-oss-object-acl": x_oss_object_acl,
+                        "x-oss-forbid-overwrite": x_oss_forbid_overwrite,
+                        "success_action_status": "200",
+                    },
+                    files={"file": (tmp_name, f)},
+                    timeout=300,
+                )
+            upload_resp.raise_for_status()
+            file_url = f"oss://{oss_key}"
+        else:
+            raise Exception("无法获取上传凭证")
+    except Exception:
+        # Fallback: clean up and raise a helpful error
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise Exception(
+            "阿里云 ASR 需要可公网访问的文件URL。请将音频文件上传至 OSS 或其他公网存储后重试。"
+            "DashScope 不支持直接上传本地文件或 base64 编码。"
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    # Step 3: Submit transcription task
     payload = {
         "model": "paraformer-v2",
-        "input": {
-            "file_urls": [],
-            "data": audio_b64,
-            "format": audio_format,
-            "sample_rate": 16000,
-        },
+        "input": {"file_urls": [file_url]},
         "parameters": {
             "language_hints": ["zh", "en"],
             "diarization_enabled": True,
         },
     }
     resp = http.post(
-        f"{base_url}/transcription",
-        headers={**headers, "X-DashScope-Async": "enable"},
+        "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        headers=headers,
         json=payload,
         timeout=120,
     )
@@ -919,8 +969,8 @@ def transcribe_aliyun(creds, filepath):
     if not task_id:
         raise Exception(f"阿里云 ASR 提交失败: {result}")
 
-    # Step 2: Poll task status
-    for _ in range(120):
+    # Step 4: Poll task status
+    for _ in range(180):
         _time.sleep(3)
         resp = http.get(
             f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}",
@@ -931,9 +981,8 @@ def transcribe_aliyun(creds, filepath):
         result = resp.json()
         status = result.get("output", {}).get("task_status", "")
         if status == "SUCCEEDED":
-            # Get transcription result URL
             results = result.get("output", {}).get("results", [])
-            if results:
+            if results and results[0].get("subtask_status") == "SUCCEEDED":
                 trans_url = results[0].get("transcription_url", "")
                 if trans_url:
                     trans_resp = http.get(trans_url, timeout=60)
@@ -959,16 +1008,18 @@ def transcribe_aliyun(creds, filepath):
                                 "metadata": {"language": "zh", "total_speakers": len(speaker_map)},
                                 "segments": segments,
                             }, ensure_ascii=False, indent=2)
-                        # No diarization, return plain text
                         return transcripts[0].get("text", "")
-            # Fallback
-            return result.get("output", {}).get("text", "")
+            # Check for subtask failure
+            if results and results[0].get("subtask_status") == "FAILED":
+                msg = results[0].get("message", "Unknown")
+                raise Exception(f"阿里云 ASR 失败: {msg}")
+            return ""
         elif status == "FAILED":
             msg = result.get("output", {}).get("message", "Unknown")
             raise Exception(f"阿里云 ASR 失败: {msg}")
-        # PENDING / RUNNING → keep polling
 
     raise Exception("阿里云 ASR 超时，请稍后重试")
+
 
 
 def transcribe_microsoft_cn(creds, filepath):
