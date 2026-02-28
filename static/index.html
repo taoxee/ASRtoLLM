@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>媒体文件转录与摘要工具</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; }
+.subtitle { text-align: center; color: #666; margin-bottom: 32px; font-size: 0.95rem; }
+.card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.card h2 { font-size: 1.1rem; margin-bottom: 16px; color: #1a1a2e; border-left: 4px solid #4361ee; padding-left: 12px; }
+.form-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.form-group { flex: 1; min-width: 200px; }
+.form-group label { display: block; margin-bottom: 6px; font-size: 0.9rem; font-weight: 500; color: #555; }
+.form-group select, .form-group input { width: 100%; padding: 10px 12px; border: 1px solid #d9d9d9; border-radius: 8px; font-size: 0.9rem; transition: border-color 0.2s; }
+.form-group select:focus, .form-group input:focus { outline: none; border-color: #4361ee; box-shadow: 0 0 0 3px rgba(67,97,238,0.1); }
+.vendor-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; margin-left: 4px; }
+.badge-asr { background: #e8f5e9; color: #2e7d32; }
+.badge-llm { background: #e3f2fd; color: #1565c0; }
+.badge-tts { background: #fff3e0; color: #e65100; }
+.badge-other { background: #f3e5f5; color: #7b1fa2; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#process-btn:hover { background: #3a56d4; }
+#process-btn:disabled { background: #aaa; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎙️ 媒体文件转录与摘要</h1>
+  <p class="subtitle">上传音视频文件 → ASR 语音识别 → LLM 智能摘要</p>
+
+  <div id="save-toast" style="display:none;position:fixed;top:20px;right:20px;background:#2e7d32;color:#fff;padding:8px 16px;border-radius:8px;font-size:0.85rem;z-index:999;transition:opacity 0.3s;">✅ 已自动保存</div>
+
+  <!-- Upload & Process (FIRST — core feature) -->
+  <div class="card">
+    <h2>📁 上传文件并处理</h2>
+    <div class="form-row">
+      <div class="form-group" style="flex:2;">
+        <label>选择音视频文件</label>
+        <input type="file" id="media-file" accept=".mp3,.mp4,.wav,.m4a,.webm,.ogg,.flac,.mpeg,.mpga" style="padding:8px;">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ASR 供应商（语音转文字）</label>
+        <select id="asr-vendor"><option value="">-- 请选择 --</option></select>
+        <div id="asr-no-vendor" style="display:none;font-size:0.8rem;color:#e65100;margin-top:4px;">⚠️ 暂无已配置的 ASR 供应商，请先在下方配置凭证</div>
+      </div>
+      <div class="form-group">
+        <label>LLM 供应商（文本摘要）</label>
+        <select id="llm-vendor"><option value="">-- 请选择 --</option></select>
+        <div id="llm-no-vendor" style="display:none;font-size:0.8rem;color:#e65100;margin-top:4px;">⚠️ 暂无已配置的 LLM 供应商，请先在下方配置凭证</div>
+      </div>
+    </div>
+    <button id="process-btn" onclick="processFile()" style="width:100%;padding:12px;background:#4361ee;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer;transition:background 0.2s;">
+      🚀 开始处理
+    </button>
+    <div id="progress" style="display:none;margin-top:16px;text-align:center;">
+      <div style="display:inline-block;width:24px;height:24px;border:3px solid #4361ee;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+      <span id="progress-text" style="margin-left:8px;color:#666;">处理中...</span>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="card" id="results-card" style="display:none;">
+    <h2>📝 处理结果</h2>
+    <div style="margin-bottom:16px;">
+      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;">转录文本</label>
+      <div id="transcript-output" style="background:#f8f9fa;padding:16px;border-radius:8px;white-space:pre-wrap;max-height:300px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #e9ecef;"></div>
+    </div>
+    <div>
+      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;">智能摘要</label>
+      <div id="summary-output" style="background:#f0f4ff;padding:16px;border-radius:8px;white-space:pre-wrap;max-height:400px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #d6e0ff;"></div>
+    </div>
+  </div>
+
+  <!-- Vendor Key Management (collapsible) -->
+  <div class="card" id="creds-card">
+    <h2 style="cursor:pointer;user-select:none;" onclick="toggleCreds()">
+      🔑 供应商凭证管理 <span id="creds-toggle" style="font-size:0.85rem;color:#888;margin-left:8px;">▼ 展开</span>
+    </h2>
+    <p style="font-size:0.85rem;color:#888;margin-bottom:8px;">凭证仅保存在浏览器本地，输入即自动保存，刷新页面后自动恢复。</p>
+    <div id="creds-summary" style="font-size:0.85rem;color:#4caf50;margin-bottom:8px;"></div>
+    <div id="vendor-keys" style="display:none;"></div>
+  </div>
+
+  <!-- Vendor Reference Table -->
+  <div class="card">
+    <h2>📋 供应商能力一览</h2>
+    <div style="overflow-x:auto;">
+      <table id="vendor-table" style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+        <thead><tr style="background:#f8f9fa;"><th style="padding:10px;text-align:left;border-bottom:2px solid #dee2e6;">供应商</th><th style="padding:10px;text-align:left;border-bottom:2px solid #dee2e6;">支持的产品类型</th><th style="padding:10px;text-align:left;border-bottom:2px solid #dee2e6;">所需凭证</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<style>
+.vendor-section { border: 1px solid #e9ecef; border-radius: 8px; padding: 16px; margin-bottom: 12px; transition: border-color 0.2s; }
+.vendor-section:hover { border-color: #4361ee; }
+.vendor-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.vendor-fields { display: flex; gap: 12px; flex-wrap: wrap; }
+.vendor-fields .field-item { flex: 1; min-width: 180px; }
+.vendor-fields .field-item label { font-size: 0.8rem; color: #777; margin-bottom: 4px; display: block; }
+.vendor-fields .field-item input { width: 100%; padding: 8px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 0.85rem; }
+.vendor-fields .field-item input:focus { outline: none; border-color: #4361ee; box-shadow: 0 0 0 2px rgba(67,97,238,0.1); }
+.optional-tag { font-size: 0.7rem; color: #aaa; margin-left: 2px; }
+.filled-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: auto; }
+.filled-yes { background: #4caf50; }
+.filled-no { background: #e0e0e0; }
+</style>
+<script>
+let VENDORS = {};
+let saveTimeout = null;
+let credsExpanded = false;
+
+async function init() {
+  const resp = await fetch("/api/vendors");
+  VENDORS = await resp.json();
+  renderVendorKeys();
+  renderVendorTable();
+  populateSelects();
+  updateCredsSummary();
+}
+
+function getStoredCreds() {
+  try { return JSON.parse(localStorage.getItem("vendor_creds") || "{}"); } catch { return {}; }
+}
+
+function saveCred(vendor, fieldKey, value) {
+  const all = getStoredCreds();
+  if (!all[vendor]) all[vendor] = {};
+  all[vendor][fieldKey] = value;
+  localStorage.setItem("vendor_creds", JSON.stringify(all));
+  updateFilledIndicator(vendor);
+  populateSelects();
+  updateCredsSummary();
+  showToast();
+}
+
+function showToast() {
+  const toast = document.getElementById("save-toast");
+  toast.style.display = "block";
+  toast.style.opacity = "1";
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => { toast.style.opacity = "0"; setTimeout(() => toast.style.display = "none", 300); }, 1200);
+}
+
+function isVendorReady(vendor) {
+  const info = VENDORS[vendor];
+  if (!info) return false;
+  const creds = getStoredCreds()[vendor] || {};
+  const requiredFields = info.fields.filter(f => !f.optional);
+  return requiredFields.length > 0 && requiredFields.every(f => creds[f.key] && creds[f.key].trim());
+}
+
+function updateCredsSummary() {
+  const ready = Object.keys(VENDORS).filter(v => isVendorReady(v));
+  const el = document.getElementById("creds-summary");
+  if (ready.length === 0) {
+    el.innerHTML = '<span style="color:#e65100;">尚未配置任何供应商凭证</span>';
+  } else {
+    el.innerHTML = `已配置: ${ready.join(", ")}`;
+  }
+}
+
+function toggleCreds() {
+  credsExpanded = !credsExpanded;
+  document.getElementById("vendor-keys").style.display = credsExpanded ? "block" : "none";
+  document.getElementById("creds-toggle").textContent = credsExpanded ? "▲ 收起" : "▼ 展开";
+}
+
+function updateFilledIndicator(vendor) {
+  const dot = document.getElementById(`indicator-${CSS.escape(vendor)}`);
+  if (dot) {
+    const ready = isVendorReady(vendor);
+    dot.className = "filled-indicator " + (ready ? "filled-yes" : "filled-no");
+    dot.title = ready ? "凭证已填写完整" : "还有必填项未填写";
+  }
+}
+
+function renderVendorKeys() {
+  const container = document.getElementById("vendor-keys");
+  const creds = getStoredCreds();
+  container.innerHTML = Object.entries(VENDORS).map(([vendor, info]) => {
+    const vc = creds[vendor] || {};
+    const fieldsHtml = info.fields.map(f => {
+      const val = vc[f.key] || "";
+      const optTag = f.optional ? '<span class="optional-tag">(选填)</span>' : '';
+      const inputType = "text";
+      const maskStyle = (f.secret !== false) ? ' style="-webkit-text-security: disc;"' : '';
+      return `<div class="field-item">
+        <label>${f.label}${optTag}</label>
+        <input type="${inputType}"${maskStyle} placeholder="${f.placeholder || ''}" value="${val}"
+          oninput="saveCred('${vendor}', '${f.key}', this.value)">
+      </div>`;
+    }).join("");
+    const noteHtml = info.note ? `<div style="font-size:0.78rem;color:#e65100;margin-top:6px;">📌 ${info.note}</div>` : "";
+    return `<div class="vendor-section">
+      <div class="vendor-name">
+        ${vendor}
+        <span style="font-size:0.75rem;color:#999;">${info.types.join(" / ")}</span>
+        <span class="filled-indicator filled-no" id="indicator-${CSS.escape(vendor)}"></span>
+      </div>
+      <div class="vendor-fields">${fieldsHtml}</div>
+      ${noteHtml}
+    </div>`;
+  }).join("");
+  Object.keys(VENDORS).forEach(v => updateFilledIndicator(v));
+}
+
+function populateSelects() {
+  const asrSel = document.getElementById("asr-vendor");
+  const llmSel = document.getElementById("llm-vendor");
+  const asrPrev = asrSel.value;
+  const llmPrev = llmSel.value;
+
+  asrSel.innerHTML = '<option value="">-- 请选择 --</option>';
+  llmSel.innerHTML = '<option value="">-- 请选择 --</option>';
+
+  let asrCount = 0, llmCount = 0;
+  Object.entries(VENDORS).forEach(([name, info]) => {
+    if (info.types.includes("ASR") && isVendorReady(name)) {
+      asrSel.innerHTML += `<option value="${name}">${name}</option>`;
+      asrCount++;
+    }
+    if (info.types.includes("LLM") && isVendorReady(name)) {
+      llmSel.innerHTML += `<option value="${name}">${name}</option>`;
+      llmCount++;
+    }
+  });
+
+  // Restore previous selection if still available
+  if (asrPrev) asrSel.value = asrPrev;
+  if (llmPrev) llmSel.value = llmPrev;
+
+  document.getElementById("asr-no-vendor").style.display = asrCount === 0 ? "block" : "none";
+  document.getElementById("llm-no-vendor").style.display = llmCount === 0 ? "block" : "none";
+}
+
+function renderVendorTable() {
+  const tbody = document.querySelector("#vendor-table tbody");
+  tbody.innerHTML = Object.entries(VENDORS).map(([name, info]) => `
+    <tr style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:10px;font-weight:500;">${name}</td>
+      <td style="padding:10px;">${info.types.map(t => {
+        const cls = t === "ASR" ? "badge-asr" : t === "LLM" ? "badge-llm" : t === "TTS" ? "badge-tts" : "badge-other";
+        return `<span class="vendor-badge ${cls}">${t}</span>`;
+      }).join(" ")}</td>
+      <td style="padding:10px;font-size:0.82rem;color:#666;">${info.fields.map(f => f.label + (f.optional ? '(选填)' : '')).join(", ")}</td>
+    </tr>
+  `).join("");
+}
+
+function getVendorCreds(vendor) {
+  return getStoredCreds()[vendor] || {};
+}
+
+function validateVendorCreds(vendor) {
+  const info = VENDORS[vendor];
+  const creds = getVendorCreds(vendor);
+  const missing = info.fields.filter(f => !f.optional && (!creds[f.key] || !creds[f.key].trim()));
+  if (missing.length > 0) return `${vendor} 缺少必填凭证: ${missing.map(f => f.label).join(", ")}`;
+  return null;
+}
+
+async function processFile() {
+  const fileInput = document.getElementById("media-file");
+  const asrVendor = document.getElementById("asr-vendor").value;
+  const llmVendor = document.getElementById("llm-vendor").value;
+
+  if (!fileInput.files.length) return alert("请选择一个音视频文件");
+  if (!asrVendor) return alert("请选择 ASR 供应商");
+  if (!llmVendor) return alert("请选择 LLM 供应商");
+
+  const asrErr = validateVendorCreds(asrVendor);
+  if (asrErr) return alert(asrErr);
+  const llmErr = validateVendorCreds(llmVendor);
+  if (llmErr) return alert(llmErr);
+
+  const btn = document.getElementById("process-btn");
+  const progress = document.getElementById("progress");
+  const progressText = document.getElementById("progress-text");
+  btn.disabled = true;
+  progress.style.display = "block";
+  progressText.textContent = "正在上传并转录...";
+  document.getElementById("results-card").style.display = "none";
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  formData.append("asr_vendor", asrVendor);
+  formData.append("asr_creds", JSON.stringify(getVendorCreds(asrVendor)));
+  formData.append("llm_vendor", llmVendor);
+  formData.append("llm_creds", JSON.stringify(getVendorCreds(llmVendor)));
+
+  try {
+    progressText.textContent = "正在处理，请稍候（ASR + LLM）...";
+    const resp = await fetch("/api/process", { method: "POST", body: formData });
+    const data = await resp.json();
+    if (!resp.ok) { alert(data.error || "处理失败"); return; }
+    document.getElementById("transcript-output").textContent = data.transcript;
+    document.getElementById("summary-output").textContent = data.summary;
+    document.getElementById("results-card").style.display = "block";
+    document.getElementById("results-card").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    alert("请求失败: " + e.message);
+  } finally {
+    btn.disabled = false;
+    progress.style.display = "none";
+  }
+}
+
+init();
+</script>
+</body>
+</html>
