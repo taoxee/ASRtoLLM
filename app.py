@@ -300,23 +300,55 @@ def transcribe_deepgram(creds, filepath):
 
 
 
+
 def transcribe_elevenlabs(creds, filepath):
     """ElevenLabs Scribe v1 with speaker diarization."""
+    import time as _time
     api_key = creds.get("api_key", "")
     headers = {"xi-api-key": api_key}
-    with open(filepath, "rb") as f:
-        resp = http.post(
-            "https://api.elevenlabs.io/v1/speech-to-text",
-            headers=headers,
-            files={"file": (os.path.basename(filepath), f)},
-            data={
-                "model_id": "scribe_v1",
-                "diarize": "true",
-                "timestamps_granularity": "word",
-            },
-            timeout=300,
-        )
-    resp.raise_for_status()
+    form_data = {
+        "model_id": "scribe_v1",
+        "diarize": "true",
+        "timestamps_granularity": "word",
+    }
+    url = "https://api.elevenlabs.io/v1/speech-to-text"
+
+    # Retry up to 3 times — proxy connections can drop on large uploads
+    last_err = None
+    for attempt in range(3):
+        try:
+            with open(filepath, "rb") as f:
+                resp = http.post(
+                    url,
+                    headers=headers,
+                    files={"file": (os.path.basename(filepath), f)},
+                    data=form_data,
+                    timeout=600,
+                )
+            resp.raise_for_status()
+            break
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            if attempt < 2:
+                _time.sleep(2 * (attempt + 1))
+                continue
+            # Last attempt: try direct connection (no proxy)
+            try:
+                direct = requests.Session()
+                direct.proxies = {"http": "", "https": ""}
+                with open(filepath, "rb") as f:
+                    resp = direct.post(
+                        url,
+                        headers=headers,
+                        files={"file": (os.path.basename(filepath), f)},
+                        data=form_data,
+                        timeout=600,
+                    )
+                resp.raise_for_status()
+                break
+            except Exception:
+                raise last_err
+
     data = resp.json()
     # Build diarized output from words with speaker info
     words = data.get("words", [])
@@ -358,6 +390,7 @@ def transcribe_elevenlabs(creds, filepath):
             "segments": segments,
         }, ensure_ascii=False, indent=2)
     return data.get("text", "")
+
 
 
 
