@@ -109,7 +109,7 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
     <div id="creds-summary" style="font-size:0.85rem;color:#4caf50;margin-bottom:8px;"></div>
     <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <button onclick="importKeys()" style="padding:8px 16px;background:#4361ee;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">📥 一键导入凭证</button>
-      <label style="padding:8px 16px;background:#ff9800;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;display:inline-block;">📁 从 JSON 文件导入<input type="file" accept=".json" onchange="importFromFile(event)" style="display:none;"></label>
+      <label style="padding:8px 16px;background:#ff9800;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;display:inline-block;">📁 从文件导入（CSV/JSON）<input type="file" accept=".json,.csv" onchange="importFromFile(event)" style="display:none;"></label>
       <button onclick="exportKeys()" style="padding:8px 16px;background:#2e7d32;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">📤 导出凭证</button>
       <button onclick="clearAllKeys()" style="padding:8px 16px;background:#e53935;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">🗑️ 清除所有凭证</button>
     </div>
@@ -211,7 +211,7 @@ function isVendorReady(vendor) {
   if (!info) return false;
   const creds = getStoredCreds()[vendor] || {};
   const requiredFields = info.fields.filter(f => !f.optional);
-  return requiredFields.length > 0 && requiredFields.every(f => creds[f.key] && creds[f.key].trim());
+  return requiredFields.length > 0 && requiredFields.every(f => (creds[f.key] && creds[f.key].trim()) || (f.default && f.default.trim()));
 }
 
 function updateCredsSummary() {
@@ -245,7 +245,7 @@ function renderVendorKeys() {
   container.innerHTML = Object.entries(VENDORS).map(([vendor, info]) => {
     const vc = creds[vendor] || {};
     const fieldsHtml = info.fields.map(f => {
-      const val = vc[f.key] || "";
+      const val = vc[f.key] || f.default || "";
       const optTag = f.optional ? '<span class="optional-tag">(选填)</span>' : '';
       const inputType = "text";
       const maskStyle = (f.secret !== false) ? ' style="-webkit-text-security: disc;"' : '';
@@ -640,8 +640,18 @@ function importFromFile(event) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const creds = JSON.parse(e.target.result);
-      if (!creds || typeof creds !== "object") throw new Error("无效的 JSON 格式");
+      const text = e.target.result.trim();
+      let creds;
+      const isCSV = file.name.endsWith(".csv") || (!text.startsWith("{") && text.includes(","));
+      if (isCSV) {
+        creds = parseCSVCreds(text);
+      } else {
+        creds = JSON.parse(text);
+      }
+      if (!creds || typeof creds !== "object" || Object.keys(creds).length === 0) {
+        showImportStatus("未从文件中解析到有效凭证", true);
+        return;
+      }
       const existing = getStoredCreds();
       let imported = 0;
       for (const [vendor, fields] of Object.entries(creds)) {
@@ -665,6 +675,67 @@ function importFromFile(event) {
   };
   reader.readAsText(file);
   event.target.value = "";
+}
+
+function parseCSVCreds(text) {
+  // Parse vendor_keys.csv format: 供应商,支持产品类型,Key
+  // Key column contains "label: value; label: value" or "label: 'value', label: 'value'"
+  const result = {};
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (!line.trim() || line.startsWith("供应商")) continue;
+    // Handle CSV quoting: find first two commas outside quotes
+    const row = parseCSVRow(line);
+    if (row.length < 3) continue;
+    const vendor = row[0].trim();
+    const keyStr = row[2].trim();
+    if (!vendor || !keyStr) continue;
+    const vendorInfo = VENDORS[vendor];
+    if (!vendorInfo) continue;
+    // Build label→field_key map from VENDORS
+    const labelMap = {};
+    vendorInfo.fields.forEach(f => { labelMap[f.label] = f.key; });
+    // Parse entries: try semicolon split first, then comma-quote split
+    let entries = keyStr.split(/[;；]/);
+    if (entries.length === 1 && keyStr.includes(": ") && keyStr.includes(",")) {
+      entries = keyStr.split(/',\s*/);
+    }
+    for (let entry of entries) {
+      entry = entry.trim();
+      if (!entry) continue;
+      const m = entry.match(/^(.+?)\s*[:：]\s*(.*)/);
+      if (!m) continue;
+      const label = m[1].trim();
+      const value = m[2].trim().replace(/^['"]|['"]$/g, "");
+      if (!value) continue;
+      const fieldKey = labelMap[label];
+      if (fieldKey) {
+        if (!result[vendor]) result[vendor] = {};
+        result[vendor][fieldKey] = value;
+      }
+    }
+  }
+  return result;
+}
+
+function parseCSVRow(line) {
+  // Simple CSV row parser that handles quoted fields
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
 }
 
 function exportKeys() {

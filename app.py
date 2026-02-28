@@ -148,10 +148,8 @@ VENDORS = {
     "微软-Global": {
         "types": ["ASR", "TTS", "声音复刻", "翻译"],
         "fields": [
-            {"key": "key1",     "label": "密钥1",     "placeholder": "xxxxxxxx"},
-            {"key": "key2",     "label": "密钥2",     "placeholder": "xxxxxxxx", "optional": True},
-            {"key": "region",   "label": "位置/区域",  "placeholder": "eastus", "secret": False},
-            {"key": "endpoint", "label": "终结点",     "placeholder": "https://eastus.api.cognitive.microsoft.com", "secret": False},
+            {"key": "key1",   "label": "Key",    "placeholder": "xxxxxxxx"},
+            {"key": "region", "label": "Region", "placeholder": "eastus", "secret": False, "default": "eastus"},
         ],
     },
     "Groq": {
@@ -178,6 +176,7 @@ VENDORS = {
             {"key": "appid",         "label": "APPID",        "placeholder": "xxxxxxxx"},
             {"key": "access_key",    "label": "accessKey",    "placeholder": "xxxxxxxx"},
             {"key": "access_secret", "label": "accessSecret", "placeholder": "xxxxxxxx"},
+            {"key": "language",      "label": "语言参数",      "placeholder": "autodialect", "secret": False, "default": "autodialect"},
         ],
         "note": "方言自由说ASR，语言参数：autodialect（自动识别中英及中文方言）",
     },
@@ -674,15 +673,380 @@ def transcribe_tencent(creds, filepath):
     raise Exception("腾讯云 ASR 超时，请稍后重试")
 
 
+def transcribe_microsoft_global(creds, filepath):
+    """Microsoft Global Speech-to-Text via Fast Transcription REST API."""
+    api_key = creds.get("key1", "")
+    region = creds.get("region", "eastus").strip() or "eastus"
+    endpoint = f"https://{region}.api.cognitive.microsoft.com"
+
+    definition = json.dumps({
+        "locales": ["zh-CN", "en-US"],
+        "profanityFilterMode": "None",
+        "diarizationSettings": {
+            "minSpeakers": 1,
+            "maxSpeakers": 10,
+        },
+    })
+
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+    with open(filepath, "rb") as f:
+        resp = http.post(
+            f"{endpoint}/speechtotext/transcriptions:transcribe?api-version=2024-11-15",
+            headers=headers,
+            files={
+                "audio": (os.path.basename(filepath), f),
+                "definition": (None, definition, "application/json"),
+            },
+            timeout=300,
+        )
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Build diarized output from phrases
+    phrases = data.get("phrases", [])
+    if phrases:
+        speaker_map = {}
+        segments = []
+        for p in phrases:
+            spk = p.get("speaker", 1)
+            if spk not in speaker_map:
+                speaker_map[spk] = f"Speaker {len(speaker_map) + 1}"
+            offset_ms = p.get("offsetMilliseconds", 0)
+            duration_ms = p.get("durationMilliseconds", 0)
+            segments.append({
+                "start_time": _seconds_to_hms(offset_ms / 1000),
+                "end_time": _seconds_to_hms((offset_ms + duration_ms) / 1000),
+                "speaker": speaker_map[spk],
+                "text": p.get("text", ""),
+            })
+        return json.dumps({
+            "metadata": {"language": "zh", "total_speakers": len(speaker_map)},
+            "segments": segments,
+        }, ensure_ascii=False, indent=2)
+
+    # Fallback: combined text
+    combined = data.get("combinedPhrases", [])
+    if combined:
+        return combined[0].get("text", "")
+    return ""
+
+
+def transcribe_xfyun(creds, filepath):
+    """讯飞 ASR: 非实时转写 API (raasr.xfyun.cn) with speaker diarization.
+    Flow: prepare → upload (chunked) → merge → poll progress → getResult."""
+    import time as _time
+    import hashlib
+    import hmac
+    import base64
+
+    appid = creds.get("appid", "")
+    access_key = creds.get("access_key", "")
+    access_secret = creds.get("access_secret", "")
+    language = creds.get("language", "autodialect")
+    host = "https://raasr.xfyun.cn/v2/api"
+    chunk_size = 10 * 1024 * 1024  # 10MB
+
+    def _make_signature():
+        ts = str(int(_time.time()))
+        base_string = appid + ts
+        md5_hash = hashlib.md5(base_string.encode("utf-8")).hexdigest()
+        signa = hmac.new(
+            access_key.encode("utf-8"),
+            md5_hash.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+        return base64.b64encode(signa).decode("utf-8"), ts
+
+    file_size = os.path.getsize(filepath)
+    file_name = os.path.basename(filepath)
+    slice_num = (file_size + chunk_size - 1) // chunk_size
+
+    # Step 1: Prepare
+    signa, ts = _make_signature()
+    prepare_data = {
+        "appId": appid,
+        "signa": signa,
+        "ts": ts,
+        "fileSize": str(file_size),
+        "fileName": file_name,
+        "duration": "200",
+        "language": language,
+        "callbackUrl": "",
+        "hasSeperateByDefault": "true",
+        "roleType": "2",
+        "hasParticulars": "true",
+    }
+    resp = http.post(f"{host}/upload", data=prepare_data, timeout=60)
+    resp.raise_for_status()
+    result = resp.json()
+    if result.get("code") != "000000":
+        raise Exception(f"讯飞 prepare 失败: {result.get('descInfo', result)}")
+    task_id = result["content"]["orderId"]
+
+    # Step 2: Upload file chunks
+    with open(filepath, "rb") as f:
+        slice_idx = 1
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            signa, ts = _make_signature()
+            upload_data = {
+                "appId": appid,
+                "signa": signa,
+                "ts": ts,
+                "taskId": task_id,
+                "sliceId": f"aaaaaaaaaa"[:10 - len(str(slice_idx))] + str(slice_idx),
+            }
+            resp = http.post(
+                f"{host}/upload",
+                data=upload_data,
+                files={"file": (file_name, chunk)},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            slice_idx += 1
+
+    # Step 3: Merge
+    signa, ts = _make_signature()
+    merge_data = {"appId": appid, "signa": signa, "ts": ts, "taskId": task_id}
+    resp = http.post(f"{host}/merge", data=merge_data, timeout=60)
+    resp.raise_for_status()
+
+    # Step 4: Poll for result
+    for _ in range(180):
+        _time.sleep(5)
+        signa, ts = _make_signature()
+        query_data = {"appId": appid, "signa": signa, "ts": ts, "taskId": task_id}
+        resp = http.post(f"{host}/getResult", data=query_data, timeout=60)
+        resp.raise_for_status()
+        result = resp.json()
+        code = result.get("code", "")
+        if code == "000000":
+            content = result.get("content", {})
+            order_result = content.get("orderResult", "")
+            if order_result:
+                try:
+                    parsed = json.loads(order_result)
+                    lattice = parsed.get("lattice", [])
+                    if lattice:
+                        segments = []
+                        speaker_map = {}
+                        for item in lattice:
+                            json_1best = json.loads(item.get("json_1best", "{}"))
+                            st = json_1best.get("st", {})
+                            spk = st.get("rl", "0")
+                            if spk not in speaker_map:
+                                speaker_map[spk] = f"Speaker {len(speaker_map) + 1}"
+                            bg = int(st.get("bg", "0"))
+                            ed = int(st.get("ed", "0"))
+                            words = st.get("rt", [{}])[0].get("ws", [])
+                            text = "".join(w.get("cw", [{}])[0].get("w", "") for w in words)
+                            if text.strip():
+                                segments.append({
+                                    "start_time": _seconds_to_hms(bg / 1000),
+                                    "end_time": _seconds_to_hms(ed / 1000),
+                                    "speaker": speaker_map[spk],
+                                    "text": text,
+                                })
+                        if segments:
+                            return json.dumps({
+                                "metadata": {"language": language, "total_speakers": len(speaker_map)},
+                                "segments": segments,
+                            }, ensure_ascii=False, indent=2)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                return order_result
+            # Still processing
+            status = content.get("orderInfo", {}).get("status")
+            if status == 4:  # completed
+                return content.get("orderResult", "")
+            elif status == -1:
+                raise Exception("讯飞 ASR 任务失败")
+        elif code == "26605":  # still processing
+            continue
+        else:
+            raise Exception(f"讯飞查询失败: {result.get('descInfo', result)}")
+
+    raise Exception("讯飞 ASR 超时，请稍后重试")
+
+
+def transcribe_aliyun(creds, filepath):
+    """阿里云 ASR via DashScope Paraformer HTTP API (no SDK needed).
+    Uses async file transcription: submit task → poll → get result."""
+    import time as _time
+    import base64
+
+    api_key = creds.get("api_key", "")
+    base_url = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Read and base64-encode the audio file
+    with open(filepath, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    ext = os.path.splitext(filepath)[1].lower().lstrip(".")
+    format_map = {"mp3": "mp3", "wav": "wav", "m4a": "m4a", "mp4": "mp4",
+                  "ogg": "ogg", "flac": "flac", "webm": "opus"}
+    audio_format = format_map.get(ext, "mp3")
+
+    # Step 1: Submit transcription task
+    payload = {
+        "model": "paraformer-v2",
+        "input": {
+            "file_urls": [],
+            "data": audio_b64,
+            "format": audio_format,
+            "sample_rate": 16000,
+        },
+        "parameters": {
+            "language_hints": ["zh", "en"],
+            "diarization_enabled": True,
+        },
+    }
+    resp = http.post(
+        f"{base_url}/transcription",
+        headers={**headers, "X-DashScope-Async": "enable"},
+        json=payload,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    result = resp.json()
+    task_id = result.get("output", {}).get("task_id", "")
+    if not task_id:
+        raise Exception(f"阿里云 ASR 提交失败: {result}")
+
+    # Step 2: Poll task status
+    for _ in range(120):
+        _time.sleep(3)
+        resp = http.get(
+            f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        status = result.get("output", {}).get("task_status", "")
+        if status == "SUCCEEDED":
+            # Get transcription result URL
+            results = result.get("output", {}).get("results", [])
+            if results:
+                trans_url = results[0].get("transcription_url", "")
+                if trans_url:
+                    trans_resp = http.get(trans_url, timeout=60)
+                    trans_resp.raise_for_status()
+                    trans_data = trans_resp.json()
+                    transcripts = trans_data.get("transcripts", [])
+                    if transcripts:
+                        sentences = transcripts[0].get("sentences", [])
+                        if sentences and any(s.get("speaker_id") is not None for s in sentences):
+                            speaker_map = {}
+                            segments = []
+                            for s in sentences:
+                                spk = s.get("speaker_id", 0)
+                                if spk not in speaker_map:
+                                    speaker_map[spk] = f"Speaker {len(speaker_map) + 1}"
+                                segments.append({
+                                    "start_time": _seconds_to_hms(s.get("begin_time", 0) / 1000),
+                                    "end_time": _seconds_to_hms(s.get("end_time", 0) / 1000),
+                                    "speaker": speaker_map[spk],
+                                    "text": s.get("text", ""),
+                                })
+                            return json.dumps({
+                                "metadata": {"language": "zh", "total_speakers": len(speaker_map)},
+                                "segments": segments,
+                            }, ensure_ascii=False, indent=2)
+                        # No diarization, return plain text
+                        return transcripts[0].get("text", "")
+            # Fallback
+            return result.get("output", {}).get("text", "")
+        elif status == "FAILED":
+            msg = result.get("output", {}).get("message", "Unknown")
+            raise Exception(f"阿里云 ASR 失败: {msg}")
+        # PENDING / RUNNING → keep polling
+
+    raise Exception("阿里云 ASR 超时，请稍后重试")
+
+
+def transcribe_microsoft_cn(creds, filepath):
+    """微软-世纪互联 ASR via Azure China Speech-to-Text Fast Transcription API."""
+    api_key = creds.get("key1", "")
+    region = creds.get("region", "chinaeast2").strip() or "chinaeast2"
+    endpoint = creds.get("endpoint", "").strip()
+
+    # Build base URL from region if no custom endpoint
+    if endpoint:
+        # Strip token endpoint path if user pasted the full issuetoken URL
+        base = endpoint.split("/sts/")[0] if "/sts/" in endpoint else endpoint
+    else:
+        base = f"https://{region}.api.cognitive.azure.cn"
+
+    definition = json.dumps({
+        "locales": ["zh-CN", "en-US"],
+        "profanityFilterMode": "None",
+        "diarizationSettings": {
+            "minSpeakers": 1,
+            "maxSpeakers": 10,
+        },
+    })
+
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+    with open(filepath, "rb") as f:
+        resp = http.post(
+            f"{base}/speechtotext/transcriptions:transcribe?api-version=2024-11-15",
+            headers=headers,
+            files={
+                "audio": (os.path.basename(filepath), f),
+                "definition": (None, definition, "application/json"),
+            },
+            timeout=300,
+        )
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Build diarized output from phrases
+    phrases = data.get("phrases", [])
+    if phrases:
+        speaker_map = {}
+        segments = []
+        for p in phrases:
+            spk = p.get("speaker", 1)
+            if spk not in speaker_map:
+                speaker_map[spk] = f"Speaker {len(speaker_map) + 1}"
+            offset_ms = p.get("offsetMilliseconds", 0)
+            duration_ms = p.get("durationMilliseconds", 0)
+            segments.append({
+                "start_time": _seconds_to_hms(offset_ms / 1000),
+                "end_time": _seconds_to_hms((offset_ms + duration_ms) / 1000),
+                "speaker": speaker_map[spk],
+                "text": p.get("text", ""),
+            })
+        return json.dumps({
+            "metadata": {"language": "zh", "total_speakers": len(speaker_map)},
+            "segments": segments,
+        }, ensure_ascii=False, indent=2)
+
+    combined = data.get("combinedPhrases", [])
+    if combined:
+        return combined[0].get("text", "")
+    return ""
+
 
 ASR_HANDLERS = {
-    "OpenAI":     lambda c, fp: transcribe_openai_compatible(c, fp, "https://api.openai.com/v1"),
-    "Groq":       lambda c, fp: transcribe_openai_compatible(c, fp, "https://api.groq.com/openai/v1"),
-    "Deepgram":   transcribe_deepgram,
-    "ElevenLabs": transcribe_elevenlabs,
-    "火山云":     transcribe_volcengine,
-    "Soniox":     transcribe_soniox,
-    "腾讯云":     transcribe_tencent,
+    "OpenAI":       lambda c, fp: transcribe_openai_compatible(c, fp, "https://api.openai.com/v1"),
+    "Groq":         lambda c, fp: transcribe_openai_compatible(c, fp, "https://api.groq.com/openai/v1"),
+    "Deepgram":     transcribe_deepgram,
+    "ElevenLabs":   transcribe_elevenlabs,
+    "火山云":       transcribe_volcengine,
+    "Soniox":       transcribe_soniox,
+    "腾讯云":       transcribe_tencent,
+    "微软-Global":  transcribe_microsoft_global,
+    "微软-世纪互联": transcribe_microsoft_cn,
+    "阿里云":       transcribe_aliyun,
+    "讯飞":         transcribe_xfyun,
 }
 
 

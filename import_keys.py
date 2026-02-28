@@ -123,7 +123,7 @@ def scan_vendor_keys_csv(filepath="vendor_keys.csv"):
         "Minimax-Global": {"Group ID": "group_id", "Key": "api_key"},
         "ElevenLabs": {"Key": "api_key"},
         "Soniox": {"Key": "api_key"},
-        "微软-Global": {"密钥1": "key1", "密钥2": "key2", "位置/区域": "region", "终结点": "endpoint"},
+        "微软-Global": {"Key": "key1", "Region": "region"},
         "Groq": {"API Key": "api_key"},
         "Deepgram": {"API Key": "api_key"},
         "智谱": {"API Key": "api_key"},

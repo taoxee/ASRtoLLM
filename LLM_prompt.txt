@@ -11,7 +11,7 @@ Your responsibilities:
    - Key discussion themes
    - Decisions made
    - Risks or open issues
-   - Action items (with owner)
+   - Action items (with owner and deadline)
 3. Infer likely roles if possible (e.g., PM, Engineer, Sales) based on speech behavior.
 4. Be precise. Do not hallucinate facts not present.
 5. If something is ambiguous, mark it as "Unclear".
