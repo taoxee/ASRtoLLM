@@ -200,6 +200,19 @@ def get_vendors():
     return jsonify(VENDORS)
 
 
+@app.route("/api/import-keys")
+def import_keys():
+    """Auto-detect vendor credentials from env vars, .env, vendor_keys.csv."""
+    from import_keys import detect_all
+    csv_path = os.path.join(_PROMPT_DIR, "vendor_keys.csv")
+    env_path = os.path.join(_PROMPT_DIR, ".env")
+    creds = detect_all(
+        env_file=env_path if os.path.isfile(env_path) else None,
+        csv_file=csv_path,
+    )
+    return jsonify(creds)
+
+
 # ── ASR: transcribe audio/video via selected vendor ─────────────────
 def _seconds_to_hms(seconds):
     """Convert seconds (float) to HH:MM:SS string."""

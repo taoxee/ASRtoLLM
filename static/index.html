@@ -107,6 +107,13 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
     </h2>
     <p style="font-size:0.85rem;color:#888;margin-bottom:8px;">凭证仅保存在浏览器本地，输入即自动保存，刷新页面后自动恢复。</p>
     <div id="creds-summary" style="font-size:0.85rem;color:#4caf50;margin-bottom:8px;"></div>
+    <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <button onclick="importKeys()" style="padding:8px 16px;background:#4361ee;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">📥 一键导入凭证</button>
+      <label style="padding:8px 16px;background:#ff9800;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;display:inline-block;">📁 从 JSON 文件导入<input type="file" accept=".json" onchange="importFromFile(event)" style="display:none;"></label>
+      <button onclick="exportKeys()" style="padding:8px 16px;background:#2e7d32;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">📤 导出凭证</button>
+      <button onclick="clearAllKeys()" style="padding:8px 16px;background:#e53935;color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;">🗑️ 清除所有凭证</button>
+    </div>
+    <div id="import-status" style="display:none;font-size:0.85rem;margin-bottom:8px;padding:8px 12px;border-radius:6px;"></div>
     <div id="vendor-keys" style="display:none;"></div>
   </div>
 
@@ -586,6 +593,103 @@ async function loadTask(taskId) {
   } catch (e) {
     alert("加载任务失败: " + e.message);
   }
+}
+
+function showImportStatus(msg, isError) {
+  const el = document.getElementById("import-status");
+  el.style.display = "block";
+  el.style.background = isError ? "#ffebee" : "#e8f5e9";
+  el.style.color = isError ? "#c62828" : "#2e7d32";
+  el.innerHTML = msg;
+  setTimeout(() => { el.style.display = "none"; }, 5000);
+}
+
+async function importKeys() {
+  try {
+    const resp = await fetch("/api/import-keys");
+    const creds = await resp.json();
+    if (!creds || Object.keys(creds).length === 0) {
+      showImportStatus("未检测到凭证。可通过环境变量、.env 文件或 vendor_keys.csv 配置。", true);
+      return;
+    }
+    const existing = getStoredCreds();
+    let imported = 0;
+    for (const [vendor, fields] of Object.entries(creds)) {
+      if (!existing[vendor]) existing[vendor] = {};
+      for (const [key, val] of Object.entries(fields)) {
+        if (val && val.trim()) {
+          existing[vendor][key] = val.trim();
+          imported++;
+        }
+      }
+    }
+    localStorage.setItem("vendor_creds", JSON.stringify(existing));
+    renderVendorKeys();
+    populateSelects();
+    updateCredsSummary();
+    const vendors = Object.keys(creds).join(", ");
+    showImportStatus(`✅ 已导入 ${Object.keys(creds).length} 个供应商的 ${imported} 个凭证字段 (${vendors})`, false);
+  } catch (e) {
+    showImportStatus("导入失败: " + e.message, true);
+  }
+}
+
+function importFromFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const creds = JSON.parse(e.target.result);
+      if (!creds || typeof creds !== "object") throw new Error("无效的 JSON 格式");
+      const existing = getStoredCreds();
+      let imported = 0;
+      for (const [vendor, fields] of Object.entries(creds)) {
+        if (typeof fields !== "object") continue;
+        if (!existing[vendor]) existing[vendor] = {};
+        for (const [key, val] of Object.entries(fields)) {
+          if (val && String(val).trim()) {
+            existing[vendor][key] = String(val).trim();
+            imported++;
+          }
+        }
+      }
+      localStorage.setItem("vendor_creds", JSON.stringify(existing));
+      renderVendorKeys();
+      populateSelects();
+      updateCredsSummary();
+      showImportStatus(`✅ 从文件导入 ${Object.keys(creds).length} 个供应商的 ${imported} 个凭证字段`, false);
+    } catch (err) {
+      showImportStatus("文件解析失败: " + err.message, true);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = "";
+}
+
+function exportKeys() {
+  const creds = getStoredCreds();
+  if (!creds || Object.keys(creds).length === 0) {
+    showImportStatus("没有可导出的凭证", true);
+    return;
+  }
+  const blob = new Blob([JSON.stringify(creds, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "vendor_creds.json";
+  a.click();
+  URL.revokeObjectURL(url);
+  showImportStatus("✅ 凭证已导出为 vendor_creds.json", false);
+}
+
+function clearAllKeys() {
+  if (!confirm("确定要清除所有已保存的供应商凭证吗？此操作不可撤销。\nAre you sure you want to clear all saved credentials? This cannot be undone.")) return;
+  localStorage.removeItem("vendor_creds");
+  renderVendorKeys();
+  populateSelects();
+  updateCredsSummary();
+  showImportStatus("🗑️ 所有凭证已清除", false);
 }
 
 init();

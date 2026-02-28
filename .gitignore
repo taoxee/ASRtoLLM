@@ -11,3 +11,4 @@ build/
 Thumbs.db
 *.log
 output/
+vendor_creds.json
