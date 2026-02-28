@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>媒体文件转录与摘要工具</title>
+<title>媒体文件转录与会议纪要工具</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
@@ -29,8 +29,8 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
 </head>
 <body>
 <div class="container">
-  <h1>🎙️ 媒体文件转录与摘要</h1>
-  <p class="subtitle">上传音视频文件 → ASR 语音识别 → LLM 智能摘要</p>
+  <h1>🎙️ 媒体文件转录与会议纪要</h1>
+  <p class="subtitle">上传音视频文件 → ASR 语音识别（说话人分离）→ LLM 会议纪要</p>
 
   <div id="save-toast" style="display:none;position:fixed;top:20px;right:20px;background:#2e7d32;color:#fff;padding:8px 16px;border-radius:8px;font-size:0.85rem;z-index:999;transition:opacity 0.3s;">✅ 已自动保存</div>
 
@@ -45,12 +45,12 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>ASR 供应商（语音转文字）</label>
+        <label>ASR 供应商（语音转文字 + 说话人分离）</label>
         <select id="asr-vendor"><option value="">-- 请选择 --</option></select>
         <div id="asr-no-vendor" style="display:none;font-size:0.8rem;color:#e65100;margin-top:4px;">⚠️ 暂无已配置的 ASR 供应商，请先在下方配置凭证</div>
       </div>
       <div class="form-group">
-        <label>LLM 供应商（文本摘要）</label>
+        <label>LLM 供应商（会议纪要）</label>
         <select id="llm-vendor"><option value="">-- 请选择 --</option></select>
         <div id="llm-no-vendor" style="display:none;font-size:0.8rem;color:#e65100;margin-top:4px;">⚠️ 暂无已配置的 LLM 供应商，请先在下方配置凭证</div>
       </div>
@@ -58,23 +58,46 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
     <button id="process-btn" onclick="processFile()" style="width:100%;padding:12px;background:#4361ee;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer;transition:background 0.2s;">
       🚀 开始处理
     </button>
-    <div id="progress" style="display:none;margin-top:16px;text-align:center;">
-      <div style="display:inline-block;width:24px;height:24px;border:3px solid #4361ee;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
-      <span id="progress-text" style="margin-left:8px;color:#666;">处理中...</span>
+    <!-- Progress bar -->
+    <div id="progress-container" style="display:none;margin-top:16px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div id="progress-spinner" style="width:18px;height:18px;border:2px solid #4361ee;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+        <span id="progress-text" style="font-size:0.88rem;color:#555;"></span>
+      </div>
+      <div style="background:#e9ecef;border-radius:6px;height:8px;overflow:hidden;">
+        <div id="progress-bar" style="height:100%;background:linear-gradient(90deg,#4361ee,#7c3aed);border-radius:6px;width:0%;transition:width 0.5s ease;"></div>
+      </div>
+      <!-- Step indicators -->
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:0.78rem;color:#999;">
+        <span id="step-upload">⏳ 上传</span>
+        <span id="step-asr">⏳ ASR 转录</span>
+        <span id="step-llm">⏳ LLM 会议纪要</span>
+        <span id="step-done">⏳ 完成</span>
+      </div>
     </div>
   </div>
 
-  <!-- Results -->
+  <!-- Results (shown incrementally) -->
   <div class="card" id="results-card" style="display:none;">
     <h2>📝 处理结果</h2>
-    <div style="margin-bottom:16px;">
-      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;">转录文本</label>
-      <div id="transcript-output" style="background:#f8f9fa;padding:16px;border-radius:8px;white-space:pre-wrap;max-height:300px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #e9ecef;"></div>
+    <div id="task-id-display" style="font-size:0.82rem;color:#888;margin-bottom:12px;"></div>
+    <div id="transcript-section" style="margin-bottom:16px;display:none;">
+      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;cursor:pointer;user-select:none;" onclick="toggleTranscript()">转录文本 <span id="asr-vendor-tag" style="font-size:0.78rem;color:#2e7d32;"></span> <span id="transcript-toggle" style="font-size:0.78rem;color:#888;margin-left:4px;">▲ 收起</span></label>
+      <div id="transcript-meta" style="display:none;font-size:0.82rem;color:#666;margin-bottom:8px;padding:6px 12px;background:#e8f5e9;border-radius:6px;"></div>
+      <div id="transcript-output" style="background:#f8f9fa;padding:16px;border-radius:8px;max-height:500px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #e9ecef;"></div>
     </div>
-    <div>
-      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;">智能摘要</label>
-      <div id="summary-output" style="background:#f0f4ff;padding:16px;border-radius:8px;white-space:pre-wrap;max-height:400px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #d6e0ff;"></div>
+    <div id="summary-section" style="display:none;">
+      <label style="font-weight:600;color:#555;display:block;margin-bottom:8px;cursor:pointer;user-select:none;" onclick="toggleSummary()">会议纪要 <span id="llm-vendor-tag" style="font-size:0.78rem;color:#1565c0;"></span> <span id="summary-toggle" style="font-size:0.78rem;color:#888;margin-left:4px;">▲ 收起</span></label>
+      <div id="summary-output" style="background:#f0f4ff;padding:16px;border-radius:8px;max-height:600px;overflow-y:auto;font-size:0.9rem;line-height:1.6;border:1px solid #d6e0ff;"></div>
     </div>
+  </div>
+
+  <!-- Task History (collapsible) -->
+  <div class="card">
+    <h2 style="cursor:pointer;user-select:none;" onclick="toggleHistory()">
+      📂 历史任务 <span id="history-toggle" style="font-size:0.85rem;color:#888;margin-left:8px;">▼ 展开</span>
+    </h2>
+    <div id="task-history" style="display:none;"></div>
   </div>
 
   <!-- Vendor Key Management (collapsible) -->
@@ -112,6 +135,32 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
 .filled-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: auto; }
 .filled-yes { background: #4caf50; }
 .filled-no { background: #e0e0e0; }
+/* Diarized transcript segments */
+.diarized-segment { margin-bottom: 10px; padding: 8px 12px; border-left: 3px solid #4361ee; background: #fff; border-radius: 0 6px 6px 0; }
+.diarized-segment .seg-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.diarized-segment .seg-speaker { font-weight: 600; font-size: 0.85rem; color: #4361ee; }
+.diarized-segment .seg-time { font-size: 0.75rem; color: #999; font-family: monospace; }
+.diarized-segment .seg-text { font-size: 0.9rem; color: #333; line-height: 1.5; }
+.diarized-segment:nth-child(even) { border-left-color: #7c3aed; }
+.diarized-segment:nth-child(even) .seg-speaker { color: #7c3aed; }
+.diarized-segment:nth-child(odd):nth-child(n+3) { border-left-color: #e65100; }
+.diarized-segment:nth-child(odd):nth-child(n+3) .seg-speaker { color: #e65100; }
+/* Speaker color palette */
+.spk-1 { border-left-color: #4361ee; } .spk-1 .seg-speaker { color: #4361ee; }
+.spk-2 { border-left-color: #7c3aed; } .spk-2 .seg-speaker { color: #7c3aed; }
+.spk-3 { border-left-color: #e65100; } .spk-3 .seg-speaker { color: #e65100; }
+.spk-4 { border-left-color: #00838f; } .spk-4 .seg-speaker { color: #00838f; }
+.spk-5 { border-left-color: #ad1457; } .spk-5 .seg-speaker { color: #ad1457; }
+/* Markdown rendering in summary */
+#summary-output h1, #summary-output h2, #summary-output h3 { margin: 12px 0 6px; color: #1a1a2e; }
+#summary-output h1 { font-size: 1.2rem; } #summary-output h2 { font-size: 1.05rem; } #summary-output h3 { font-size: 0.95rem; }
+#summary-output ul, #summary-output ol { padding-left: 20px; margin: 6px 0; }
+#summary-output li { margin-bottom: 4px; }
+#summary-output p { margin: 6px 0; }
+#summary-output strong { color: #1a1a2e; }
+#summary-output table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+#summary-output th, #summary-output td { border: 1px solid #d6e0ff; padding: 6px 10px; text-align: left; font-size: 0.85rem; }
+#summary-output th { background: #e8eaf6; }
 </style>
 <script>
 let VENDORS = {};
@@ -260,12 +309,90 @@ function getVendorCreds(vendor) {
   return getStoredCreds()[vendor] || {};
 }
 
+function renderTranscript(text) {
+  const output = document.getElementById("transcript-output");
+  const meta = document.getElementById("transcript-meta");
+  try {
+    const data = JSON.parse(text);
+    if (data.segments && Array.isArray(data.segments)) {
+      // Show metadata
+      if (data.metadata) {
+        const lang = data.metadata.language || "未知";
+        const speakers = data.metadata.total_speakers || "?";
+        meta.innerHTML = `🗣️ 识别到 <strong>${speakers}</strong> 位说话人 · 语言: ${lang}`;
+        meta.style.display = "block";
+      }
+      // Render diarized segments
+      output.innerHTML = data.segments.map(seg => {
+        const spkNum = parseInt((seg.speaker || "").replace(/\D/g, "")) || 1;
+        const spkClass = `spk-${Math.min(spkNum, 5)}`;
+        return `<div class="diarized-segment ${spkClass}">
+          <div class="seg-header">
+            <span class="seg-speaker">${escapeHtml(seg.speaker)}</span>
+            <span class="seg-time">${escapeHtml(seg.start_time)} → ${escapeHtml(seg.end_time)}</span>
+          </div>
+          <div class="seg-text">${escapeHtml(seg.text)}</div>
+        </div>`;
+      }).join("");
+      return;
+    }
+  } catch (e) { /* not JSON, render as plain text */ }
+  meta.style.display = "none";
+  output.innerHTML = `<div style="white-space:pre-wrap;">${escapeHtml(text)}</div>`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function renderMarkdown(text) {
+  // Simple Markdown → HTML renderer for meeting minutes
+  let html = escapeHtml(text);
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  // Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Horizontal rule
+  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid #d6e0ff;margin:12px 0;">');
+  // Line breaks → paragraphs (double newline)
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = `<p>${html}</p>`;
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  html = html.replace(/<p>\s*(<h[123]>)/g, '$1');
+  html = html.replace(/(<\/h[123]>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<ul>)/g, '$1');
+  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<hr[^>]*>)\s*<\/p>/g, '$1');
+  return html;
+}
+
 function validateVendorCreds(vendor) {
   const info = VENDORS[vendor];
   const creds = getVendorCreds(vendor);
   const missing = info.fields.filter(f => !f.optional && (!creds[f.key] || !creds[f.key].trim()));
   if (missing.length > 0) return `${vendor} 缺少必填凭证: ${missing.map(f => f.label).join(", ")}`;
   return null;
+}
+
+function setStep(stepId, status) {
+  const el = document.getElementById(stepId);
+  if (!el) return;
+  if (status === 'active') el.textContent = el.textContent.replace(/^./, '🔄');
+  else if (status === 'done') el.textContent = el.textContent.replace(/^./, '✅');
+  else if (status === 'error') el.textContent = el.textContent.replace(/^./, '❌');
 }
 
 async function processFile() {
@@ -283,12 +410,31 @@ async function processFile() {
   if (llmErr) return alert(llmErr);
 
   const btn = document.getElementById("process-btn");
-  const progress = document.getElementById("progress");
+  const progressContainer = document.getElementById("progress-container");
+  const progressBar = document.getElementById("progress-bar");
   const progressText = document.getElementById("progress-text");
   btn.disabled = true;
-  progress.style.display = "block";
-  progressText.textContent = "正在上传并转录...";
+  progressContainer.style.display = "block";
+  progressBar.style.width = "5%";
+  progressText.textContent = "正在上传文件...";
+
+  // Reset steps
+  ["step-upload","step-asr","step-llm","step-done"].forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.textContent = el.textContent.replace(/^./, '⏳');
+  });
+  setStep("step-upload", "active");
+
+  // Reset results
   document.getElementById("results-card").style.display = "none";
+  document.getElementById("transcript-section").style.display = "none";
+  document.getElementById("summary-section").style.display = "none";
+  document.getElementById("transcript-output").textContent = "";
+  document.getElementById("transcript-meta").style.display = "none";
+  document.getElementById("summary-output").textContent = "";
+  document.getElementById("task-id-display").textContent = "";
+  document.getElementById("asr-vendor-tag").textContent = "";
+  document.getElementById("llm-vendor-tag").textContent = "";
 
   const formData = new FormData();
   formData.append("file", fileInput.files[0]);
@@ -298,19 +444,147 @@ async function processFile() {
   formData.append("llm_creds", JSON.stringify(getVendorCreds(llmVendor)));
 
   try {
-    progressText.textContent = "正在处理，请稍候（ASR + LLM）...";
     const resp = await fetch("/api/process", { method: "POST", body: formData });
-    const data = await resp.json();
-    if (!resp.ok) { alert(data.error || "处理失败"); return; }
-    document.getElementById("transcript-output").textContent = data.transcript;
-    document.getElementById("summary-output").textContent = data.summary;
-    document.getElementById("results-card").style.display = "block";
-    document.getElementById("results-card").scrollIntoView({ behavior: "smooth" });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events from buffer
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      let eventType = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ") && eventType) {
+          const data = JSON.parse(line.slice(6));
+          handleSSE(eventType, data, asrVendor, llmVendor);
+          eventType = "";
+        }
+      }
+    }
   } catch (e) {
     alert("请求失败: " + e.message);
   } finally {
     btn.disabled = false;
-    progress.style.display = "none";
+    document.getElementById("progress-spinner").style.display = "none";
+  }
+}
+
+function handleSSE(event, data, asrVendor, llmVendor) {
+  const progressBar = document.getElementById("progress-bar");
+  const progressText = document.getElementById("progress-text");
+
+  if (event === "progress") {
+    progressBar.style.width = data.percent + "%";
+    progressText.textContent = data.message;
+    if (data.step === "upload") { setStep("step-upload", "done"); setStep("step-asr", "active"); }
+    if (data.step === "asr_done") { setStep("step-asr", "done"); setStep("step-llm", "active"); }
+    if (data.step === "llm_done") { setStep("step-llm", "done"); }
+  } else if (event === "transcript") {
+    document.getElementById("results-card").style.display = "block";
+    document.getElementById("transcript-section").style.display = "block";
+    renderTranscript(data.text);
+    document.getElementById("asr-vendor-tag").textContent = `(${asrVendor})`;
+    document.getElementById("results-card").scrollIntoView({ behavior: "smooth" });
+  } else if (event === "summary") {
+    document.getElementById("summary-section").style.display = "block";
+    document.getElementById("summary-output").innerHTML = renderMarkdown(data.text);
+    document.getElementById("llm-vendor-tag").textContent = `(${llmVendor})`;
+  } else if (event === "done") {
+    progressBar.style.width = "100%";
+    progressBar.style.background = "linear-gradient(90deg,#2e7d32,#4caf50)";
+    progressText.textContent = "✅ " + data.message;
+    document.getElementById("task-id-display").textContent = `任务ID: ${data.task_id}`;
+    setStep("step-done", "done");
+    document.getElementById("progress-spinner").style.display = "none";
+    loadTaskHistory();
+  } else if (event === "error") {
+    progressBar.style.width = "100%";
+    progressBar.style.background = "#e65100";
+    progressText.textContent = "❌ " + data.message;
+    document.getElementById("progress-spinner").style.display = "none";
+    setStep("step-done", "error");
+  }
+}
+
+let summaryExpanded = true;
+
+function toggleSummary() {
+  summaryExpanded = !summaryExpanded;
+  document.getElementById("summary-output").style.display = summaryExpanded ? "block" : "none";
+  document.getElementById("summary-toggle").textContent = summaryExpanded ? "▲ 收起" : "▼ 展开";
+}
+
+let transcriptExpanded = true;
+
+function toggleTranscript() {
+  transcriptExpanded = !transcriptExpanded;
+  document.getElementById("transcript-output").style.display = transcriptExpanded ? "block" : "none";
+  document.getElementById("transcript-toggle").textContent = transcriptExpanded ? "▲ 收起" : "▼ 展开";
+}
+
+let historyExpanded = false;
+
+function toggleHistory() {
+  historyExpanded = !historyExpanded;
+  document.getElementById("task-history").style.display = historyExpanded ? "block" : "none";
+  document.getElementById("history-toggle").textContent = historyExpanded ? "▲ 收起" : "▼ 展开";
+  if (historyExpanded) loadTaskHistory();
+}
+
+async function loadTaskHistory() {
+  const container = document.getElementById("task-history");
+  try {
+    const resp = await fetch("/api/tasks");
+    const tasks = await resp.json();
+    if (tasks.length === 0) {
+      container.innerHTML = '<p style="color:#999;font-size:0.85rem;padding:8px 0;">暂无历史任务</p>';
+      return;
+    }
+    container.innerHTML = tasks.map(t => {
+      const status = t.error ? '❌ 失败' : '✅ 成功';
+      const statusColor = t.error ? '#e65100' : '#2e7d32';
+      return `<div style="border:1px solid #e9ecef;border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer;" onclick="loadTask('${t.task_id}')">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:500;font-size:0.9rem;">${t.source_file || '未知文件'}</span>
+          <span style="font-size:0.78rem;color:${statusColor};">${status}</span>
+        </div>
+        <div style="font-size:0.78rem;color:#999;margin-top:4px;">
+          ${t.task_id} · ASR: ${t.asr_vendor} · LLM: ${t.llm_vendor}
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    container.innerHTML = '<p style="color:#e65100;font-size:0.85rem;">加载失败</p>';
+  }
+}
+
+async function loadTask(taskId) {
+  try {
+    const resp = await fetch(`/api/tasks/${taskId}`);
+    const data = await resp.json();
+    document.getElementById("task-id-display").textContent = `任务ID: ${taskId}`;
+    if (data.transcript) {
+      document.getElementById("transcript-section").style.display = "block";
+      renderTranscript(data.transcript);
+      document.getElementById("asr-vendor-tag").textContent = data.meta ? `(${data.meta.asr_vendor})` : '';
+    }
+    if (data.summary) {
+      document.getElementById("summary-section").style.display = "block";
+      document.getElementById("summary-output").innerHTML = renderMarkdown(data.summary);
+      document.getElementById("llm-vendor-tag").textContent = data.meta ? `(${data.meta.llm_vendor})` : '';
+    }
+    document.getElementById("results-card").style.display = "block";
+    document.getElementById("results-card").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    alert("加载任务失败: " + e.message);
   }
 }
 
