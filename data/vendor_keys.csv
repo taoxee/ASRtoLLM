@@ -1,0 +1,15 @@
+供应商,支持产品类型,Key
+腾讯云,ASR;TTS;声音复刻;LLM,appid：; SecretId：; SecretKey：
+火山云,ASR;TTS;声音复刻,APP ID:; Access Token:; Secret Key:
+微软-世纪互联,ASR;TTS;翻译,密钥1:; 密钥2:; 位置/区域：chinaeast2; 终结点：https://chinaeast2.api.cognitive.azure.cn/sts/v1.0/issuetoken
+Minimax-CN,LLM;TTS,接口密钥：; Group ID：
+阿里云,ASR;TTS;LLM;声音复刻,"url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', api_key: ''"
+Minimax-Global,TTS;声音复刻;LLM,Group ID：; Key：
+ElevenLabs,ASR;TTS;声音复刻,Key：
+Soniox,ASR;翻译,Key：
+微软-Global,ASR;TTS;声音复刻;翻译,
+Groq,LLM,
+Deepgram,ASR,
+智谱,LLM,API Key: 
+讯飞,ASR,现已开通商用不限量的大模型版方言自由说ASR，详细授权信息如下。商用计费时间是2026年2月1日（含）；具体：；方言自由说识别服务：；APPID：；accessKey: ；accessSecret: ；语言参数：autodialect （说明：自动识别中英，以及中文下的多种方言）；授权用量：授权期间不限制使用；开通语种：中英+已支持的方言；开通时长：暂定2年（后续可延期）
+OpenAI,LLM,
