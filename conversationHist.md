@@ -103,3 +103,30 @@
 ### Git 状态
 - 本地 main 领先 origin/main 4 个 commit（推送后同步）
 - 最新 commit：`21d17c4`
+
+---
+
+## Conversation 3 (8 messages)
+
+### Task 1: 多任务并行队列 + Token 用量记录
+- 后端：`app.py` 新增 `threading` + `OrderedDict` 任务队列，`_task_lock` 线程安全，`/api/queue` 端点
+- LLM handlers 改为返回 `(content, token_info)` 元组，`token_info` 含 model/prompt_tokens/completion_tokens/total_tokens
+- Token 用量保存到 `meta.json` 的 `token_usage` 字段和 `llm_log.json`
+- 前端：文件选择支持多选（`multiple`），前端维护 `taskQueue` 对象，最多 `MAX_PARALLEL=3` 个任务并行
+- 每个任务独立 SSE 流，队列 UI 显示各任务状态/进度/token 用量
+- 历史任务列表也显示 token 用量
+- 文件：`app.py`, `static/index.html`
+
+### Task 2: 处理结果显示文件名
+- 结果卡片顶部新增 `#result-filename` 元素，显示 `📄 filename`
+- 实时处理和历史任务加载均显示对应文件名
+
+### Task 3: 任务队列可折叠 + 完成通知
+- 任务队列标题可点击折叠/展开，显示任务计数（进行中/已完成/总数）
+- 任务完成或失败时右上角弹出通知横幅（`.task-notify`）
+- 通知 10 秒后自动消失，点 ✕ 可立即关闭
+- 点击通知跳转到对应任务的处理结果
+
+### Git 状态
+- 提交 `c12de11`：`feat: multi-task queue with parallel processing, token usage tracking, collapsible queue, completion notifications`
+- 已推送到 origin/main
