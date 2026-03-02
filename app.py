@@ -2,7 +2,9 @@ import os
 import json
 import tempfile
 import uuid
+import threading
 from datetime import datetime
+from collections import OrderedDict
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -10,6 +12,11 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
+
+# ── Task queue for parallel processing ───────────────────────────────
+_task_lock = threading.Lock()
+_task_queue = OrderedDict()  # task_id -> {status, meta, ...}
+_MAX_PARALLEL = 3
 
 # ── Load prompt templates ────────────────────────────────────────────
 _PROMPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1153,7 +1160,16 @@ def summarize_openai_compatible(creds, text, base_url, model):
     }
     resp = http.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    data = resp.json()
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    token_info = {
+        "model": data.get("model", model),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+    return content, token_info
 
 
 
@@ -1179,7 +1195,16 @@ def summarize_minimax(creds, text, base_url, model):
         url += f"?GroupId={group_id}"
     resp = http.post(url, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    data = resp.json()
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    token_info = {
+        "model": data.get("model", model),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+    return content, token_info
 
 
 
@@ -1289,12 +1314,19 @@ def process_file():
         "llm_vendor": llm_vendor,
     }
 
+    # Register task in queue
+    with _task_lock:
+        _task_queue[task_id] = {"status": "running", "source_file": file.filename,
+                                "asr_vendor": asr_vendor, "llm_vendor": llm_vendor,
+                                "created_at": meta["created_at"]}
+
     def sse_event(event, data):
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
     def generate():
         transcript = ""
         summary = ""
+        token_usage = {}
 
         # Check cache for previous results with same file + vendors
         cached_transcript, cached_summary = _find_cached(file.filename, asr_vendor, llm_vendor)
@@ -1315,7 +1347,6 @@ def process_file():
                 yield sse_event("progress", {"step": "asr_done", "percent": 60, "message": f"✅ 命中缓存：{asr_vendor} 转录结果（来自历史任务）"})
                 yield sse_event("transcript", {"text": transcript})
                 meta["asr_status"] = "cached"
-                # Save cached copy to new task dir
                 with open(os.path.join(task_dir, "transcript.txt"), "w", encoding="utf-8") as f:
                     f.write(transcript)
             else:
@@ -1334,7 +1365,6 @@ def process_file():
 
                 with open(os.path.join(task_dir, "transcript.txt"), "w", encoding="utf-8") as f:
                     f.write(transcript)
-                # Save raw ASR request/response log
                 with open(os.path.join(task_dir, "asr_log.json"), "w", encoding="utf-8") as f:
                     json.dump({
                         "vendor": asr_vendor,
@@ -1356,35 +1386,47 @@ def process_file():
                 with open(os.path.join(task_dir, "summary.txt"), "w", encoding="utf-8") as f:
                     f.write(summary)
             else:
-                yield sse_event("progress", {"step": "llm", "percent": 65, "message": f"正在调用 {llm_vendor} 生成摘要..."})
+                yield sse_event("progress", {"step": "llm", "percent": 65, "message": f"正在调用 {llm_vendor} 生成会议纪要..."})
 
                 llm_handler = LLM_HANDLERS.get(llm_vendor)
                 if not llm_handler:
                     yield sse_event("error", {"message": f"LLM 供应商 '{llm_vendor}' 暂未实现接口对接"})
                     return
 
-                summary = llm_handler(llm_creds, transcript)
+                llm_result = llm_handler(llm_creds, transcript)
+                # LLM handlers now return (content, token_info) tuple
+                if isinstance(llm_result, tuple):
+                    summary, token_usage = llm_result
+                else:
+                    summary = llm_result
 
                 with open(os.path.join(task_dir, "summary.txt"), "w", encoding="utf-8") as f:
                     f.write(summary)
-                # Save raw LLM request/response log
+                llm_log = {
+                    "vendor": llm_vendor,
+                    "input": {"transcript_length": len(transcript), "transcript_preview": transcript[:500]},
+                    "output": {"summary_length": len(summary), "summary_preview": summary[:500]},
+                    "timestamp": datetime.now().isoformat(),
+                }
+                if token_usage:
+                    llm_log["token_usage"] = token_usage
                 with open(os.path.join(task_dir, "llm_log.json"), "w", encoding="utf-8") as f:
-                    json.dump({
-                        "vendor": llm_vendor,
-                        "input": {"transcript_length": len(transcript), "transcript_preview": transcript[:500]},
-                        "output": {"summary_length": len(summary), "summary_preview": summary[:500]},
-                        "timestamp": datetime.now().isoformat(),
-                    }, f, ensure_ascii=False, indent=2)
+                    json.dump(llm_log, f, ensure_ascii=False, indent=2)
                 meta["llm_status"] = "success"
 
-                yield sse_event("progress", {"step": "llm_done", "percent": 95, "message": f"{llm_vendor} 摘要生成完成"})
+                yield sse_event("progress", {"step": "llm_done", "percent": 95, "message": f"{llm_vendor} 会议纪要生成完成"})
                 yield sse_event("summary", {"text": summary})
+
+            # Save token usage to meta
+            if token_usage:
+                meta["token_usage"] = token_usage
 
             # Save metadata
             with open(os.path.join(task_dir, "meta.json"), "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            yield sse_event("done", {"task_id": task_id, "percent": 100, "message": "全部处理完成"})
+            yield sse_event("done", {"task_id": task_id, "percent": 100, "message": "全部处理完成",
+                                     "token_usage": token_usage})
 
         except requests.exceptions.HTTPError as e:
             detail = ""
@@ -1404,8 +1446,18 @@ def process_file():
         finally:
             if os.path.exists(filepath):
                 os.remove(filepath)
+            with _task_lock:
+                if task_id in _task_queue:
+                    _task_queue[task_id]["status"] = "done" if not meta.get("error") else "error"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+@app.route("/api/queue")
+def get_queue():
+    """Return current task queue status."""
+    with _task_lock:
+        return jsonify(list(_task_queue.values()))
 
 
 @app.route("/api/tasks")
