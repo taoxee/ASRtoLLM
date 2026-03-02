@@ -130,3 +130,24 @@
 ### Git 状态
 - 提交 `c12de11`：`feat: multi-task queue with parallel processing, token usage tracking, collapsible queue, completion notifications`
 - 已推送到 origin/main
+
+---
+
+## Conversation 4 (12 messages)
+
+### Task 1: 项目结构重构
+- 将单体 `app.py`（~1500行）拆分为模块化结构：
+  - `app/__init__.py` — Flask 应用工厂 `create_app()`
+  - `app/config.py` — 配置（路径、代理检测、VENDORS 字典、Prompt 模板）
+  - `app/utils.py` — 工具函数（`allowed_file`, `seconds_to_hms`, `find_cached`）
+  - `app/services.py` — 全部 ASR/LLM handler 函数及 handler 字典
+  - `app/routes.py` — 所有 Flask 路由（Blueprint）
+- `run.py` 作为项目唯一入口，删除根目录 `app.py`
+- 数据文件移入 `data/`：`ASR_prompt.txt`, `LLM_prompt.txt`, `conversationHist.md`, `vendor_keys.csv`
+- `config.py` 加载 prompt 时先查 `data/`，再回退根目录
+- 修复 `send_from_directory` 404 问题（改用绝对路径）
+- 删除根目录重复数据文件，`data/` 为唯一数据源
+
+### Git 状态
+- 提交 `6e42f2d`：`refactor: split monolithic app.py into modular structure`
+- 已推送到 origin/main

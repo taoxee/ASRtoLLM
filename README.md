@@ -17,6 +17,9 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 - ⚡ **缓存检测** — 相同文件 + 相同供应商自动复用历史结果
 - 🌐 **代理自动检测** — 自动识别 macOS 系统代理（ShadowsocksX-NG / ClashX 等）
 - 📊 **SSE 实时进度** — 流式进度条，ASR 完成即显示转录，LLM 完成即显示纪要
+- 📋 **多任务并行** — 支持多文件同时上传，最多 3 个任务并行处理，队列管理
+- 🔢 **Token 用量追踪** — 记录每次 LLM 调用的 token 消耗（输入/输出/合计）
+- 🔔 **任务完成通知** — 右上角弹出通知，点击跳转到对应结果
 
 ---
 
@@ -56,7 +59,7 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 
 ```bash
 pip install -r requirements.txt
-python app.py
+python run.py
 ```
 
 打开浏览器访问 / Open browser at: **http://127.0.0.1:8080**
@@ -82,6 +85,28 @@ pip install 'requests[socks]'
    Click "Start" — transcript and meeting minutes stream in real-time
 
 ---
+
+## 📁 项目结构 | Project Structure
+
+```
+├── app/                # 核心应用目录
+│   ├── __init__.py     # 应用工厂 App factory
+│   ├── config.py       # 配置（代理、供应商、Prompt）
+│   ├── routes.py       # 路由和接口定义
+│   ├── services.py     # ASR/LLM 业务逻辑
+│   └── utils.py        # 工具函数
+├── static/             # 前端静态文件
+│   └── index.html
+├── data/               # 数据文件
+│   ├── ASR_prompt.txt
+│   ├── LLM_prompt.txt
+│   ├── conversationHist.md
+│   └── vendor_keys.csv
+├── import_keys.py      # 凭证自动检测脚本
+├── run.py              # 项目启动入口
+├── requirements.txt
+└── README.md
+```
 
 ## 📁 输出结构 | Output Structure
 
