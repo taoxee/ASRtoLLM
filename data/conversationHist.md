@@ -151,3 +151,40 @@
 ### Git 状态
 - 提交 `6e42f2d`：`refactor: split monolithic app.py into modular structure`
 - 已推送到 origin/main
+
+---
+
+## Conversation 5 (40 messages)
+
+### Task 1: 删除根目录重复文档
+- 删除根目录 `ASR_prompt.txt`, `LLM_prompt.txt`, `conversationHist.md`, `vendor_keys.csv`（已在 `data/` 中有副本）
+- `data/` 为唯一数据源，`config.py` 先查 `data/` 再回退根目录
+
+### Task 2: 更新 README.md
+- 新增功能特性：多任务并行、Token 用量追踪、任务完成通知
+- 启动命令从 `python app.py` 改为 `python run.py`
+- 新增「项目结构」章节，展示模块化目录树
+
+### Task 3: 更新 conversationHist.md
+- 追加 Conversation 4 和 Conversation 5 摘要
+
+### Git 状态
+- 提交 `db713a3`：`docs: update README with new project structure, update conversation history`
+- 已推送到 origin/main
+
+---
+
+## Conversation 6 (current)
+
+### Task: 上下文迁移 + 更新 conversationHist.md
+- 对话因过长进行上下文迁移，通过 CONTEXT TRANSFER 摘要恢复项目状态
+- 读取 `app/config.py`, `app/routes.py`, `app/services.py`, `app/utils.py`, `data/conversationHist.md` 确认当前代码状态
+- 将 Conversation 5 标记为已完成（40 messages），追加 Conversation 6 记录
+
+### 用户纠正与偏好（持续有效）
+- 入口：`python run.py`（非 `python app.py`）
+- 不自动 push，用户控制推送时机
+- `data/` 为数据文件唯一来源
+- 端口 8080
+- 密钥字段用 CSS `-webkit-text-security: disc`（非 `type="password"`）
+- 目标功能：说话人分离 + 会议纪要（非字幕生成）
