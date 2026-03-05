@@ -17,6 +17,27 @@ from app.services import ASR_HANDLERS, LLM_HANDLERS
 
 bp = Blueprint("main", __name__)
 
+# ── LLM vendor base URLs for model listing ───────────────────────────
+_LLM_BASE_URLS = {
+    "OpenAI":         "https://api.openai.com/v1",
+    "Groq":           "https://api.groq.com/openai/v1",
+    "智谱":           "https://open.bigmodel.cn/api/paas/v4",
+    "Minimax-CN":     "https://api.minimax.chat/v1",
+    "Minimax-Global": "https://api.minimaxi.chat/v1",
+    "腾讯云":         "https://api.lkeap.cloud.tencent.com/v1",
+}
+
+# ── Default models per vendor ────────────────────────────────────────
+LLM_DEFAULT_MODELS = {
+    "OpenAI":         "gpt-4o",
+    "Groq":           "llama-3.3-70b-versatile",
+    "智谱":           "glm-4-flash",
+    "Minimax-CN":     "MiniMax-Text-01",
+    "Minimax-Global": "MiniMax-Text-01",
+    "腾讯云":         "deepseek-v3",
+    "阿里云":         "qwen-plus",
+}
+
 # ── Task queue for parallel processing ───────────────────────────────
 _task_lock = threading.Lock()
 _task_queue = OrderedDict()
@@ -52,6 +73,63 @@ def import_keys_route():
     return jsonify(creds)
 
 
+@bp.route("/api/models", methods=["POST"])
+def list_models():
+    """Query available models from an LLM vendor using the user's credentials."""
+    from app.config import http
+    data = request.get_json(silent=True) or {}
+    vendor = data.get("vendor", "")
+    creds = data.get("creds", {})
+
+    if not vendor or not creds:
+        return jsonify({"error": "Missing vendor or creds"}), 400
+
+    # Alibaba Cloud: custom URL support
+    if vendor == "阿里云":
+        custom_url = creds.get("url", "").strip().rstrip("/")
+        base_url = custom_url if custom_url else "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if base_url.endswith("/chat/completions"):
+            base_url = base_url.rsplit("/chat/completions", 1)[0]
+    else:
+        base_url = _LLM_BASE_URLS.get(vendor)
+
+    if not base_url:
+        return jsonify({"models": [], "default": LLM_DEFAULT_MODELS.get(vendor, "")})
+
+    # Determine API key
+    if vendor == "腾讯云":
+        api_key = creds.get("secret_key", "")
+    else:
+        api_key = creds.get("api_key", "")
+
+    if not api_key:
+        return jsonify({"models": [], "default": LLM_DEFAULT_MODELS.get(vendor, "")})
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    url = f"{base_url}/models"
+    if vendor in ("Minimax-CN", "Minimax-Global"):
+        group_id = creds.get("group_id", "")
+        if group_id:
+            url += f"?GroupId={group_id}"
+
+    try:
+        resp = http.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        result = resp.json()
+        models_data = result.get("data", [])
+        model_ids = sorted([m.get("id", "") for m in models_data if m.get("id")])
+        return jsonify({
+            "models": model_ids,
+            "default": LLM_DEFAULT_MODELS.get(vendor, model_ids[0] if model_ids else ""),
+        })
+    except Exception as e:
+        return jsonify({
+            "models": [],
+            "default": LLM_DEFAULT_MODELS.get(vendor, ""),
+            "error": str(e)[:200],
+        })
+
+
 @bp.route("/api/process", methods=["POST"])
 def process_file():
     """Upload media → ASR transcription → LLM summary. Streams progress via SSE."""
@@ -61,6 +139,7 @@ def process_file():
 
     asr_vendor = request.form.get("asr_vendor", "")
     llm_vendor = request.form.get("llm_vendor", "")
+    llm_model = request.form.get("llm_model", "")
 
     try:
         asr_creds = json.loads(request.form.get("asr_creds", "{}"))
@@ -87,6 +166,7 @@ def process_file():
         "source_file": file.filename,
         "asr_vendor": asr_vendor,
         "llm_vendor": llm_vendor,
+        "llm_model": llm_model,
     }
 
     with _task_lock:
@@ -102,7 +182,7 @@ def process_file():
         summary = ""
         token_usage = {}
 
-        cached_transcript, cached_summary = find_cached(file.filename, asr_vendor, llm_vendor)
+        cached_transcript, cached_summary = find_cached(file.filename, asr_vendor, llm_vendor, llm_model)
 
         try:
             yield sse_event("progress", {"step": "upload", "percent": 10, "message": "文件上传完成"})
@@ -175,7 +255,7 @@ def process_file():
                     yield sse_event("error", {"message": f"LLM 供应商 '{llm_vendor}' 暂未实现接口对接"})
                     return
 
-                llm_result = llm_handler(llm_creds, transcript)
+                llm_result = llm_handler(llm_creds, transcript, llm_model)
                 if isinstance(llm_result, tuple):
                     summary, token_usage = llm_result
                 else:

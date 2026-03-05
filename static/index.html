@@ -73,6 +73,11 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
         <select id="llm-vendor"><option value="">-- 请选择 --</option></select>
         <div id="llm-no-vendor" style="display:none;font-size:0.8rem;color:#e65100;margin-top:4px;">⚠️ 暂无已配置的 LLM 供应商，请先在下方配置凭证</div>
       </div>
+      <div class="form-group">
+        <label id="llm-model-label">模型</label>
+        <select id="llm-model"><option value="">-- 默认 --</option></select>
+        <div id="llm-model-status" style="font-size:0.75rem;color:#888;margin-top:3px;"></div>
+      </div>
     </div>
     <button id="process-btn" onclick="processFiles()" style="width:100%;padding:12px;background:#4361ee;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer;transition:background 0.2s;">
       🚀 开始处理
@@ -336,7 +341,9 @@ const i18n = {
     uploading: "正在上传...",
     collapseText: "▲ 收起",
     expandText: "▼ 展开",
-    errorDetail: "错误信息"
+    errorDetail: "错误信息",
+    modelDefault: "-- 默认 --",
+    modelLoading: "加载模型中..."
   },
   en: {
     title: "🎙️ VibeMeet2Notes · 灵感纪要",
@@ -344,7 +351,7 @@ const i18n = {
     tipBanner: "💡 Recommended: ASR use <strong>Soniox</strong>, LLM use <strong>Open AI</strong> (fast, accurate, cost-effective)",
     uploadTitle: "📁 Upload & Process",
     selectFile: "Select audio/video files (multiple allowed)",
-    asrVendor: "ASR Vendor (Speech-to-Text + Speaker Diarization)",
+    asrVendor: "ASR Vendor (STT + Speaker Diarization)",
     llmVendor: "LLM Vendor (Meeting Minutes)",
     selectPlaceholder: "-- Select --",
     noAsrVendor: "⚠️ No ASR vendor configured. Please add credentials below.",
@@ -418,7 +425,9 @@ const i18n = {
     uploading: "Uploading...",
     collapseText: "▲ Collapse",
     expandText: "▼ Expand",
-    errorDetail: "Error Details"
+    errorDetail: "Error Details",
+    modelDefault: "-- Default --",
+    modelLoading: "Loading models..."
   }
 };
 
@@ -569,6 +578,10 @@ function populateSelects() {
   // Restore previous selection if still available
   if (asrPrev) asrSel.value = asrPrev;
   if (llmPrev) llmSel.value = llmPrev;
+  // If LLM vendor changed, refresh model list
+  if (llmSel.value !== llmPrev) {
+    fetchModels(llmSel.value);
+  }
 
   document.getElementById("asr-no-vendor").style.display = asrCount === 0 ? "block" : "none";
   document.getElementById("llm-no-vendor").style.display = llmCount === 0 ? "block" : "none";
@@ -770,6 +783,7 @@ async function processFiles() {
   const llmErr = validateVendorCreds(llmVendor);
   if (llmErr) return alert(llmErr);
 
+  const llmModel = document.getElementById("llm-model").value;
   const files = Array.from(fileInput.files);
 
   // Add all files to queue
@@ -777,7 +791,7 @@ async function processFiles() {
   for (const f of files) {
     const qid = Date.now() + "_" + Math.random().toString(36).slice(2, 6);
     taskQueue[qid] = { fileName: f.name, file: f, status: "waiting", percent: 0, message: t("queuing"),
-                        asrVendor, llmVendor, token_usage: null, taskIdServer: null };
+                        asrVendor, llmVendor, llmModel, token_usage: null, taskIdServer: null };
     queueIds.push(qid);
   }
   updateQueueUI();
@@ -814,6 +828,7 @@ async function processSingleFile(qid) {
   formData.append("asr_creds", JSON.stringify(getVendorCreds(task.asrVendor)));
   formData.append("llm_vendor", task.llmVendor);
   formData.append("llm_creds", JSON.stringify(getVendorCreds(task.llmVendor)));
+  formData.append("llm_model", task.llmModel || "");
 
   try {
     const resp = await fetch("/api/process", { method: "POST", body: formData });
@@ -1226,6 +1241,12 @@ function applyLanguage() {
   document.getElementById("asr-no-vendor").textContent = t("noAsrVendor");
   document.getElementById("llm-no-vendor").textContent = t("noLlmVendor");
   
+  // Model label
+  document.getElementById("llm-model-label").textContent = t("modelLabel");
+  // Update default option text in model dropdown
+  const modelSel = document.getElementById("llm-model");
+  if (modelSel.options.length > 0) modelSel.options[0].textContent = t("modelDefault");
+  
   // Process button
   document.getElementById("process-btn").textContent = t("startBtn");
   
@@ -1350,8 +1371,68 @@ updateCredsSummary = function() {
   }
 };
 
+// ── LLM Model selector ──────────────────────────────────────────────
+let _modelCache = {}; // vendor -> {models:[], default:""}
+
+async function fetchModels(vendor) {
+  const sel = document.getElementById("llm-model");
+  const status = document.getElementById("llm-model-status");
+  sel.innerHTML = `<option value="">${t("modelDefault")}</option>`;
+  if (!vendor) { status.textContent = ""; return; }
+
+  // Check cache first
+  if (_modelCache[vendor]) {
+    populateModelSelect(_modelCache[vendor]);
+    return;
+  }
+
+  status.textContent = t("modelLoading");
+  const creds = getVendorCreds(vendor);
+  try {
+    const resp = await fetch("/api/models", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({vendor, creds})
+    });
+    const data = await resp.json();
+    _modelCache[vendor] = data;
+    populateModelSelect(data);
+    status.textContent = "";
+  } catch (e) {
+    status.textContent = "";
+  }
+}
+
+function populateModelSelect(data) {
+  const sel = document.getElementById("llm-model");
+  sel.innerHTML = `<option value="">${t("modelDefault")}</option>`;
+  const models = data.models || [];
+  const def = data.default || "";
+  for (const m of models) {
+    const isDefault = m === def;
+    sel.innerHTML += `<option value="${m}"${isDefault ? " selected" : ""}>${m}${isDefault ? " ★" : ""}</option>`;
+  }
+  // Restore previously selected model for this vendor if any
+  const saved = localStorage.getItem("llm_model_" + document.getElementById("llm-vendor").value);
+  if (saved && models.includes(saved)) sel.value = saved;
+}
+
+// Save model selection
+document.getElementById("llm-model").addEventListener("change", function() {
+  const vendor = document.getElementById("llm-vendor").value;
+  if (vendor) localStorage.setItem("llm_model_" + vendor, this.value);
+});
+
+// Fetch models when LLM vendor changes
+document.getElementById("llm-vendor").addEventListener("change", function() {
+  fetchModels(this.value);
+});
+
 init();
 applyLanguage();
+// Fetch models for initially selected vendor
+const _initLlmVendor = document.getElementById("llm-vendor").value;
+if (_initLlmVendor) fetchModels(_initLlmVendor);
 </script>
 </body>
 </html>

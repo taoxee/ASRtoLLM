@@ -20,8 +20,8 @@ def seconds_to_hms(seconds):
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def find_cached(source_file, asr_vendor, llm_vendor):
-    """Search output/ for a previous successful task with the same file + vendors.
+def find_cached(source_file, asr_vendor, llm_vendor, llm_model=""):
+    """Search output/ for a previous successful task with the same file + vendors + model.
     Returns (cached_transcript, cached_summary) — either may be None."""
     cached_transcript = None
     cached_summary = None
@@ -44,10 +44,13 @@ def find_cached(source_file, asr_vendor, llm_vendor):
                 with open(tp, "r", encoding="utf-8") as f:
                     cached_transcript = f.read()
         if cached_summary is None and m.get("asr_vendor") == asr_vendor and m.get("llm_vendor") == llm_vendor and m.get("llm_status") == "success":
-            sp = os.path.join(OUTPUT_DIR, tid, "summary.txt")
-            if os.path.isfile(sp):
-                with open(sp, "r", encoding="utf-8") as f:
-                    cached_summary = f.read()
+            # Also match llm_model: both empty means default, otherwise must match exactly
+            cached_model = m.get("llm_model", "")
+            if cached_model == llm_model:
+                sp = os.path.join(OUTPUT_DIR, tid, "summary.txt")
+                if os.path.isfile(sp):
+                    with open(sp, "r", encoding="utf-8") as f:
+                        cached_summary = f.read()
         if cached_transcript and cached_summary:
             break
     return cached_transcript, cached_summary

@@ -70,7 +70,6 @@ def _load_prompt(filename, fallback=""):
     return fallback
 
 
-ASR_PROMPT = _load_prompt("ASR_prompt.txt")
 LLM_PROMPT = _load_prompt("LLM_prompt.txt")
 
 

@@ -995,31 +995,31 @@ def summarize_minimax(creds, text, base_url, model):
 
 
 
-def summarize_tencent(creds, text):
+def summarize_tencent(creds, text, model=""):
     """腾讯云 uses SecretId/SecretKey — route through their OpenAI-compatible endpoint."""
     api_key = creds.get("secret_key", "")
     return summarize_openai_compatible(
         {"api_key": api_key}, text,
-        "https://api.lkeap.cloud.tencent.com/v1", "deepseek-v3"
+        "https://api.lkeap.cloud.tencent.com/v1", model or "deepseek-v3"
     )
 
 
-def summarize_aliyun(creds, text):
+def summarize_aliyun(creds, text, model=""):
     """阿里云 supports custom URL override."""
     custom_url = creds.get("url", "").strip().rstrip("/")
     base_url = custom_url if custom_url else "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # Strip /chat/completions if user pasted the full endpoint
     if base_url.endswith("/chat/completions"):
         base_url = base_url.rsplit("/chat/completions", 1)[0]
-    return summarize_openai_compatible(creds, text, base_url, "qwen-plus")
+    return summarize_openai_compatible(creds, text, base_url, model or "qwen-plus")
 
 
 LLM_HANDLERS = {
-    "OpenAI":         lambda c, text: summarize_openai_compatible(c, text, "https://api.openai.com/v1", "gpt-4o"),
-    "Groq":           lambda c, text: summarize_openai_compatible(c, text, "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
-    "智谱":           lambda c, text: summarize_openai_compatible(c, text, "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
-    "Minimax-CN":     lambda c, text: summarize_minimax(c, text, "https://api.minimax.chat/v1", "MiniMax-Text-01"),
-    "Minimax-Global": lambda c, text: summarize_minimax(c, text, "https://api.minimaxi.chat/v1", "MiniMax-Text-01"),
+    "OpenAI":         lambda c, text, model="": summarize_openai_compatible(c, text, "https://api.openai.com/v1", model or "gpt-4o"),
+    "Groq":           lambda c, text, model="": summarize_openai_compatible(c, text, "https://api.groq.com/openai/v1", model or "llama-3.3-70b-versatile"),
+    "智谱":           lambda c, text, model="": summarize_openai_compatible(c, text, "https://open.bigmodel.cn/api/paas/v4", model or "glm-4-flash"),
+    "Minimax-CN":     lambda c, text, model="": summarize_minimax(c, text, "https://api.minimax.chat/v1", model or "MiniMax-Text-01"),
+    "Minimax-Global": lambda c, text, model="": summarize_minimax(c, text, "https://api.minimaxi.chat/v1", model or "MiniMax-Text-01"),
     "腾讯云":         summarize_tencent,
     "阿里云":         summarize_aliyun,
 }
