@@ -12,7 +12,7 @@ from flask import Blueprint, request, jsonify, send_from_directory, Response, st
 from werkzeug.utils import secure_filename
 
 from app.config import VENDORS, OUTPUT_DIR, UPLOAD_FOLDER, DATA_DIR
-from app.utils import allowed_file, find_cached
+from app.utils import allowed_file, find_cached, transcode_audio
 from app.services import ASR_HANDLERS, LLM_HANDLERS
 
 bp = Blueprint("main", __name__)
@@ -105,11 +105,27 @@ def process_file():
         cached_transcript, cached_summary = find_cached(file.filename, asr_vendor, llm_vendor)
 
         try:
-            yield sse_event("progress", {"step": "upload", "percent": 15, "message": "文件上传完成"})
+            yield sse_event("progress", {"step": "upload", "percent": 10, "message": "文件上传完成"})
 
             source_copy = os.path.join(task_dir, "source_" + filename)
             if os.path.exists(filepath):
                 shutil.copy2(filepath, source_copy)
+
+            # ── Transcode: convert to 16kHz mono MP3 for vendor compatibility ──
+            asr_filepath = filepath  # default: use original
+            yield sse_event("progress", {"step": "transcode", "percent": 12, "message": "正在优化音频格式..."})
+            transcoded_path, transcode_info = transcode_audio(filepath, target_dir=os.path.dirname(filepath))
+            meta["transcode"] = transcode_info
+
+            if not transcode_info["skipped"]:
+                asr_filepath = transcoded_path
+                orig_mb = transcode_info["original_size"] / 1024 / 1024
+                new_mb = transcode_info["transcoded_size"] / 1024 / 1024
+                yield sse_event("progress", {"step": "transcode_done", "percent": 15,
+                    "message": f"音频优化完成: {orig_mb:.1f}MB → {new_mb:.1f}MB"})
+            else:
+                yield sse_event("progress", {"step": "transcode_done", "percent": 15,
+                    "message": f"跳过音频优化 ({transcode_info['reason']})"})
 
             # ASR
             if cached_transcript:
@@ -126,7 +142,7 @@ def process_file():
                     yield sse_event("error", {"message": f"ASR 供应商 '{asr_vendor}' 暂未实现接口对接"})
                     return
 
-                transcript = asr_handler(asr_creds, filepath)
+                transcript = asr_handler(asr_creds, asr_filepath)
                 if not transcript.strip():
                     yield sse_event("error", {"message": "转录结果为空，请检查音频文件是否包含语音内容"})
                     return
@@ -136,7 +152,7 @@ def process_file():
                 with open(os.path.join(task_dir, "asr_log.json"), "w", encoding="utf-8") as f:
                     json.dump({
                         "vendor": asr_vendor,
-                        "input": {"file": file.filename, "file_size_bytes": os.path.getsize(filepath) if os.path.exists(filepath) else 0},
+                        "input": {"file": file.filename, "file_size_bytes": os.path.getsize(asr_filepath) if os.path.exists(asr_filepath) else 0},
                         "output": {"transcript_length": len(transcript), "transcript_preview": transcript[:500]},
                         "timestamp": datetime.now().isoformat(),
                     }, f, ensure_ascii=False, indent=2)
@@ -206,8 +222,11 @@ def process_file():
                 json.dump(meta, f, ensure_ascii=False, indent=2)
             yield sse_event("error", {"message": f"处理失败: {str(e)}"})
         finally:
+            # Clean up uploaded file and transcoded file
             if os.path.exists(filepath):
                 os.remove(filepath)
+            if asr_filepath != filepath and os.path.exists(asr_filepath):
+                os.remove(asr_filepath)
             with _task_lock:
                 if task_id in _task_queue:
                     _task_queue[task_id]["status"] = "done" if not meta.get("error") else "error"

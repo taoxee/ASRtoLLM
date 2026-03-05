@@ -23,6 +23,7 @@
 - 🔢 **Token 用量追踪** — 记录每次 LLM 调用的 token 消耗（输入/输出/合计）
 - 🔔 **任务完成通知** — 右上角弹出通知，点击跳转到对应结果
 - 🌍 **多语言界面** — 支持中文/英文切换，语言偏好自动保存
+- 🔄 **智能转码** — 自动将音视频转为 16kHz 单声道 MP3，减小体积，兼容所有供应商
 
 ---
 
@@ -66,9 +67,24 @@
 
 ## 🚀 快速开始
 
-### 前提条件：准备 API Key
+### 前提条件
 
-使用本工具前，你需要至少准备 **一个 ASR 供应商** 和 **一个 LLM 供应商** 的 API Key。
+1. **准备 API Key** — 至少需要一个 ASR 供应商和一个 LLM 供应商的 API Key
+
+2. **安装 ffmpeg** — 用于将音视频自动转码为 16kHz 单声道 MP3，减小体积，兼容所有供应商
+
+```bash
+# 方式一：pip 安装（最简单，跨平台）
+pip install static-ffmpeg
+
+# 方式二：系统包管理器
+# macOS
+brew install ffmpeg
+# Ubuntu / Debian
+sudo apt install ffmpeg
+# Windows (Chocolatey)
+choco install ffmpeg
+```
 
 推荐组合（速度快、性价比高）：
 
@@ -87,6 +103,8 @@ python run.py
 ```
 
 打开浏览器访问：**http://127.0.0.1:8080**
+
+### 可选：安装 SOCKS 代理支持
 
 如果使用 SOCKS 代理（如 ShadowsocksX-NG），需安装：
 

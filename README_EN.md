@@ -23,6 +23,7 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 - 🔢 **Token Usage Tracking** — Records token consumption for each LLM call (input/output/total)
 - 🔔 **Task Completion Notification** — Pop-up notification in top-right corner, click to jump to result
 - 🌍 **Multi-language UI** — Switch between Chinese/English, language preference auto-saved
+- 🔄 **Smart Transcoding** — Auto-converts audio/video to 16kHz mono MP3, reducing file size for vendor compatibility
 
 ---
 
@@ -66,9 +67,24 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 
 ## 🚀 Quick Start
 
-### Prerequisites: Get Your API Keys
+### Prerequisites
 
-You'll need at least **one ASR vendor** and **one LLM vendor** API key before using this tool.
+1. **Get your API Keys** — You need at least one ASR vendor and one LLM vendor API key
+
+2. **Install ffmpeg** — Used to auto-transcode audio/video to 16kHz mono MP3, reducing file size for vendor compatibility
+
+```bash
+# Option 1: pip install (easiest, cross-platform)
+pip install static-ffmpeg
+
+# Option 2: system package manager
+# macOS
+brew install ffmpeg
+# Ubuntu / Debian
+sudo apt install ffmpeg
+# Windows (Chocolatey)
+choco install ffmpeg
+```
 
 Recommended combination (fast, cost-effective):
 
@@ -87,6 +103,8 @@ python run.py
 ```
 
 Open browser at: **http://127.0.0.1:8080**
+
+### Optional: SOCKS Proxy Support
 
 If using SOCKS proxy (e.g. ShadowsocksX-NG):
 

@@ -14,40 +14,6 @@ from app.utils import seconds_to_hms
 # ═══════════════════════════════════════════════════════════════════════
 
 def transcribe_openai_compatible(creds, filepath, base_url="https://api.openai.com/v1"):
-    """Works for OpenAI, Groq, and other OpenAI-compatible APIs."""
-    api_key = creds.get("api_key", "")
-    headers = {"Authorization": f"Bearer {api_key}"}
-    model = "whisper-large-v3" if "groq" in base_url else "whisper-1"
-    with open(filepath, "rb") as f:
-        resp = http.post(
-            f"{base_url}/audio/transcriptions",
-            headers=headers,
-            files={"file": (os.path.basename(filepath), f)},
-            data={
-                "model": model,
-                "response_format": "verbose_json",
-                "timestamp_granularities[]": "segment",
-            },
-            timeout=300,
-        )
-    resp.raise_for_status()
-    data = resp.json()
-    raw_segments = data.get("segments", [])
-    if raw_segments:
-        segments = []
-        for s in raw_segments:
-            segments.append({
-                "start_time": seconds_to_hms(s.get("start", 0)),
-                "end_time": seconds_to_hms(s.get("end", 0)),
-                "speaker": "Speaker 1",
-                "text": s.get("text", "").strip(),
-            })
-        return json.dumps({
-            "metadata": {"language": data.get("language", ""), "total_speakers": 1},
-            "segments": segments,
-        }, ensure_ascii=False, indent=2)
-    return data.get("text", "")
-def transcribe_openai_compatible(creds, filepath, base_url="https://api.openai.com/v1"):
     """Works for OpenAI, Groq, and other OpenAI-compatible APIs.
     Returns verbose JSON with timestamps when available."""
     api_key = creds.get("api_key", "")
