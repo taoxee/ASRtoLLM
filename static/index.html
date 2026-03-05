@@ -1323,6 +1323,10 @@ function applyLanguage() {
   
   // Update credentials summary
   updateCredsSummary();
+
+  // Re-render dynamic content with new language
+  updateQueueUI();
+  if (historyExpanded) loadTaskHistory();
 }
 
 // Override updateCredsSummary to use i18n

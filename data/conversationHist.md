@@ -238,7 +238,7 @@
 
 ---
 
-## Conversation 8 (current)
+## Conversation 8 (completed)
 
 ### Task 1: 品牌重命名 + 版权更新
 - 页面标题/h1 更新为 `🎙️ 灵感纪要 · VibeMeet2Notes`（中文）/ `🎙️ VibeMeet2Notes · 灵感纪要`（英文）
@@ -250,9 +250,46 @@
 ### Task 2: 页面底部作者署名
 - 页面底部新增 footer：`Made by taoxee · Apache 2.0`，taoxee 链接到 `https://github.com/taoxee`
 
-### Task 3: conversationHist + README 更新
-- 更新 `data/conversationHist.md`，标记 Conversation 7 完成，追加 Conversation 8 记录
-- 所有 README 同步最新状态
+### Task 3: README 前提条件 + ffmpeg 安装说明
+- CN/EN README 新增「前提条件」章节：API Key + ffmpeg
+- ffmpeg 支持 `pip install static-ffmpeg`（跨平台）或系统包管理器
+- 新增功能特性：🔄 智能转码
+
+### Task 4: ffmpeg 音频转码
+- `app/utils.py` 新增 `transcode_audio()` — 上传文件自动转为 16kHz 单声道 MP3
+- 支持系统 ffmpeg 和 `pip install static-ffmpeg`
+- `app/routes.py` 在 ASR 调用前插入转码步骤，SSE 显示转码进度
+- `run.py` 启动时检测 ffmpeg，未安装时打印安装提示
+- 转码信息保存到 `meta.json` 的 `transcode` 字段
+
+### Task 5: 代码清理
+- 删除 `services.py` 中重复的 `transcribe_openai_compatible` 函数
+- 删除 `index.html` 中未使用的 `getVendorTooltip` 函数
+- 修复 `loadTask` 中 LLM 供应商名称未翻译问题
+
+### Task 6: LLM Prompt 语言规则
+- `data/LLM_prompt.txt` 新增明确的语言规则：输出语言必须与转录文本语言一致
+
+### Task 7: 任务队列 + 历史任务 UI 优化
+- 任务队列卡片改为紧凑布局（减小 padding/margin/font）
+- 任务完成时间显示在卡片右侧（年月日时分秒）
+- 任务队列按时间倒序排列（最新在上）
+- 队列列表限高 300px 可滚动
+- 历史任务卡片显示创建时间
+- 点击失败的历史任务可跳转并显示错误原因
 
 ### Git 状态
-- 提交 `704737e`：`feat: update branding to VibeMeet2Notes/灵感纪要, fix license to Apache 2.0, add footer author link`
+- 提交 `704737e` → `0dbc4e9` → `af1a628` → `9e413f5`
+
+---
+
+## Conversation 9 (completed)
+
+### Task: 修复中文模式下显示英文字符串问题
+- `applyLanguage()` 切换语言后未重新渲染动态内容（任务队列、历史任务列表）
+- 在 `applyLanguage()` 末尾新增 `updateQueueUI()` 和 `if (historyExpanded) loadTaskHistory()` 调用
+- 修复：切换语言后，任务队列卡片和历史任务列表立即以新语言重新渲染
+- 文件：`static/index.html`, `data/conversationHist.md`
+
+### Git 状态
+- 待提交
