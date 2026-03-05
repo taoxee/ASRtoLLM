@@ -316,4 +316,84 @@
 
 ## Conversation 10 (current)
 
-（待记录）
+### Task 1: 删除未使用的 ASR_prompt.txt + 清理死代码
+- 删除 `data/ASR_prompt.txt`（ASR 供应商不接受文本 prompt）
+- 移除 `app/config.py` 中 `ASR_PROMPT = _load_prompt("ASR_prompt.txt")`
+
+### Task 2: LLM 模型选择器
+- 后端 `app/routes.py`：新增 `/api/models` POST 端点，查询各 LLM 供应商可用模型列表
+- 后端 `app/routes.py`：`/api/process` 读取 `llm_model` 参数并传递给 LLM handler
+- 后端 `app/services.py`：所有 LLM handler 接受可选 `model` 参数，默认使用各供应商预设模型
+- 前端 `static/index.html`：LLM 供应商旁新增模型下拉框，切换供应商时自动获取模型列表
+- 模型选择按供应商保存到 localStorage，默认模型标 ★
+- 新增 i18n key：`modelDefault`, `modelLoading`
+
+### Task 3: 修复缓存匹配 bug（模型维度）
+- `app/utils.py` 的 `find_cached()` 原本只匹配 file + asr_vendor + llm_vendor
+- 新增 `llm_model` 参数，缓存摘要必须模型也匹配才命中
+- `app/routes.py` 调用 `find_cached()` 时传入 `llm_model`
+
+### Task 4: 长转录文本分块摘要（Map-Reduce）
+- `app/services.py` 新增 `_chunk_transcript()` — JSON 感知分块，按说话人段落边界切分
+- `_summarize_with_chunking()` 包装器：短文本单次调用，长文本 map-reduce
+- 阈值 ~160k 字符（~80k tokens），大多数会议不会触发分块
+- Reduce 步骤使用专用 `_REDUCE_PROMPT` 合并去重
+- 所有 7 个 LLM 供应商均通过分块包装器调用
+- Token 用量跨所有调用（map + reduce）累加
+
+### Task 5: 不支持 system role 的模型兼容
+- 部分模型（如 `qwen-mt-lite`）只接受 user/assistant role，不支持 system
+- `summarize_openai_compatible` 和 `summarize_minimax` 新增 400 错误重试逻辑
+- 检测到 role 相关错误时，自动将 system prompt 合并到 user message 重试
+
+### Task 6: LLM 超时调整
+- 所有 LLM 调用超时从 120s 提升到 300s（与 ASR 一致）
+- 解决小模型（如 `qwen2.5-14b-instruct`）处理长转录超时问题
+
+### Task 7: 进度条增强
+- 任务队列进度条新增步骤指示器：上传 → 转码 → 语音识别 → 会议纪要 → 完成
+- 当前步骤蓝色高亮，已完成步骤绿色 ✓
+- 进度条加粗（4px → 6px），右侧显示百分比
+- 下方显示后端返回的描述性消息
+- 新增 i18n key：`stepUpload`, `stepTranscode`, `stepAsr`, `stepLlm`, `stepDone`
+
+### Task 8: 任务失败时刷新历史列表
+- error 事件处理中新增 `loadTaskHistory()` 调用
+- 无论成功或失败，任务完成后均刷新历史任务列表
+
+### Task 9: 长转录文本分块摘要（Map-Reduce）
+- `app/services.py` 新增 `_chunk_transcript()` — JSON 感知分块，按说话人段落边界切分
+- `_summarize_with_chunking()` 包装器：短文本单次调用，长文本 map-reduce
+- 阈值 ~160k 字符（~80k tokens），大多数会议不会触发分块
+- Reduce 步骤使用专用 `_REDUCE_PROMPT` 合并去重
+- 所有 7 个 LLM 供应商均通过分块包装器调用
+- Token 用量跨所有调用（map + reduce）累加
+
+### Task 10: 不支持 system role 的模型兼容
+- 部分模型（如 `qwen-mt-lite`）只接受 user/assistant role
+- `summarize_openai_compatible` 和 `summarize_minimax` 新增 400 错误重试
+- 检测到 role 相关错误时，自动将 system prompt 合并到 user message 重试
+
+### Task 11: LLM 超时调整
+- 所有 LLM 调用超时从 120s 提升到 300s（与 ASR 一致）
+- 解决小模型处理长转录超时问题
+
+### Task 12: 进度条增强
+- 任务队列进度条新增步骤指示器：上传 → 转码 → 语音识别 → 会议纪要 → 完成
+- 当前步骤蓝色高亮，已完成步骤绿色 ✓
+- 进度条显示百分比和描述性消息
+- 新增 i18n key：`stepUpload`, `stepTranscode`, `stepAsr`, `stepLlm`, `stepDone`
+
+### Task 13: 任务失败时刷新历史列表
+- error 事件处理中新增 `loadTaskHistory()` 调用
+- 无论成功或失败，任务完成后均刷新历史任务列表
+
+### Task 14: 更新文档
+- 更新 `README_CN.md` 和 `README_EN.md`：新增 LLM 模型选择、分块摘要、模型兼容等功能描述
+- 移除项目结构中已删除的 `ASR_prompt.txt`
+- 更新缓存检测描述（新增模型维度）
+- 更新 `conversationHist.md`
+
+### Git 状态
+- 提交 `b75845c`：`feat: LLM model selector + cache fix + cleanup`
+- 后续更改待提交（Tasks 9-14）

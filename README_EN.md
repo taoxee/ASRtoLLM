@@ -16,7 +16,7 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 - 📝 **Structured Meeting Minutes** — LLM outputs professional Markdown meeting notes (topics, decisions, action items)
 - 🔌 **Multi-Vendor Support** — 14 ASR/LLM vendors, mix and match freely
 - 💾 **Local Credential Storage** — API keys stored only in browser localStorage, never sent to server
-- ⚡ **Cache Detection** — Auto-reuse historical results for same file + same vendor
+- ⚡ **Cache Detection** — Auto-reuse historical results for same file + same vendor + same model
 - 🌐 **Auto Proxy Detection** — Detects macOS system proxy (ShadowsocksX-NG / ClashX etc.)
 - 📊 **SSE Real-time Progress** — Streaming progress bar, transcript shows when ASR completes, minutes show when LLM completes
 - 📋 **Multi-task Parallel** — Upload multiple files, up to 3 tasks processed in parallel with queue management
@@ -24,6 +24,9 @@ Upload audio/video → ASR transcription (speaker diarization) → LLM-generated
 - 🔔 **Task Completion Notification** — Pop-up notification in top-right corner, click to jump to result
 - 🌍 **Multi-language UI** — Switch between Chinese/English, language preference auto-saved
 - 🔄 **Smart Transcoding** — Auto-converts audio/video to 16kHz mono MP3, reducing file size for vendor compatibility
+- 🤖 **LLM Model Selection** — Choose specific models per LLM vendor, auto-fetches available model list
+- 📄 **Chunked Summarization** — Auto Map-Reduce for long transcripts, merges and deduplicates into complete minutes
+- 🔧 **Model Compatibility** — Auto-adapts for models that don't support system role (e.g. qwen-mt-lite)
 
 ---
 
@@ -135,7 +138,6 @@ pip install 'requests[socks]'
 ├── static/             # Frontend static files
 │   └── index.html
 ├── data/               # Data files
-│   ├── ASR_prompt.txt
 │   ├── LLM_prompt.txt
 │   ├── conversationHist.md
 │   └── vendor_keys.csv

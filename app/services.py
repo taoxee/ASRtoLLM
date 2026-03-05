@@ -930,6 +930,120 @@ ASR_HANDLERS = {
 
 # ── LLM: summarize text via selected vendor ─────────────────────────
 
+# ── Chunked summarization for long transcripts ──────────────────────
+# Threshold: ~80k tokens worth of text. Most models handle 128k context.
+# Chinese ≈ 1.5 chars/token, English ≈ 4 chars/token. Use 2 as average.
+_CHARS_PER_TOKEN = 2
+_MAX_TOKENS = 80000
+_MAX_CHARS = _MAX_TOKENS * _CHARS_PER_TOKEN  # ~160k chars
+
+_REDUCE_PROMPT = """You are a senior program manager merging partial meeting summaries into one final document.
+
+You receive multiple partial meeting minute summaries from consecutive sections of the same meeting.
+
+Your task:
+1. Merge them into ONE cohesive set of meeting minutes.
+2. Deduplicate: if the same decision, action item, or discussion appears in multiple parts, keep only one.
+3. Preserve all speaker references (Speaker 1, Speaker 2, etc.) consistently across parts.
+4. Maintain the same language as the partial summaries.
+5. Output structured professional meeting minutes in Markdown format.
+6. Do NOT add information not present in the partial summaries."""
+
+
+def _chunk_transcript(text, max_chars):
+    """Split transcript into chunks respecting speaker segment boundaries.
+    For JSON transcripts, split on segment boundaries.
+    For plain text, split on double-newlines or paragraph boundaries."""
+    if len(text) <= max_chars:
+        return [text]
+
+    # Try JSON-aware splitting (diarized transcript)
+    try:
+        data = json.loads(text)
+        if data.get("segments") and isinstance(data["segments"], list):
+            segments = data["segments"]
+            metadata = data.get("metadata", {})
+            chunks = []
+            current_segs = []
+            current_len = 0
+            # Reserve space for JSON wrapper (~200 chars)
+            effective_max = max_chars - 200
+
+            for seg in segments:
+                seg_text = json.dumps(seg, ensure_ascii=False)
+                seg_len = len(seg_text)
+
+                if current_len + seg_len > effective_max and current_segs:
+                    chunk_data = {"metadata": metadata, "segments": current_segs}
+                    chunks.append(json.dumps(chunk_data, ensure_ascii=False, indent=2))
+                    current_segs = []
+                    current_len = 0
+
+                current_segs.append(seg)
+                current_len += seg_len
+
+            if current_segs:
+                chunk_data = {"metadata": metadata, "segments": current_segs}
+                chunks.append(json.dumps(chunk_data, ensure_ascii=False, indent=2))
+
+            return chunks if chunks else [text]
+    except (json.JSONDecodeError, KeyError):
+        pass
+
+    # Fallback: split plain text on double-newlines
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current = ""
+    for para in paragraphs:
+        if len(current) + len(para) + 2 > max_chars and current:
+            chunks.append(current)
+            current = ""
+        current += ("\n\n" if current else "") + para
+    if current:
+        chunks.append(current)
+    return chunks if chunks else [text]
+
+
+def _summarize_with_chunking(summarize_fn, creds, text, base_url, model):
+    """Wrapper: if text fits in context, single call. Otherwise map-reduce."""
+    if len(text) <= _MAX_CHARS:
+        return summarize_fn(creds, text, base_url, model)
+
+    chunks = _chunk_transcript(text, _MAX_CHARS)
+    if len(chunks) == 1:
+        return summarize_fn(creds, chunks[0], base_url, model)
+
+    # Map: summarize each chunk
+    partial_summaries = []
+    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": model}
+
+    for i, chunk in enumerate(chunks):
+        chunk_prompt = f"[Part {i + 1}/{len(chunks)}] This is a section of a longer meeting transcript. Summarize this section:\n\n{chunk}"
+        content, usage = summarize_fn(creds, chunk_prompt, base_url, model)
+        partial_summaries.append(content)
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            total_usage[k] += usage.get(k, 0)
+        total_usage["model"] = usage.get("model", model)
+
+    # Reduce: merge partial summaries
+    merged_input = "\n\n---\n\n".join(
+        f"## Part {i + 1}\n{s}" for i, s in enumerate(partial_summaries)
+    )
+
+    # For reduce step, temporarily swap system prompt
+    import app.config as _cfg
+    original_prompt = _cfg.LLM_PROMPT
+    _cfg.LLM_PROMPT = _REDUCE_PROMPT
+    try:
+        final_content, reduce_usage = summarize_fn(creds, merged_input, base_url, model)
+    finally:
+        _cfg.LLM_PROMPT = original_prompt
+
+    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        total_usage[k] += reduce_usage.get(k, 0)
+
+    return final_content, total_usage
+
 def summarize_openai_compatible(creds, text, base_url, model):
     api_key = creds.get("api_key", "")
     headers = {
@@ -945,7 +1059,23 @@ def summarize_openai_compatible(creds, text, base_url, model):
         "temperature": 0.3,
         "max_tokens": 4096,
     }
-    resp = http.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=120)
+    resp = http.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=300)
+
+    # Some models (e.g. qwen-mt-*) don't support system role — retry with prompt folded into user message
+    if resp.status_code == 400:
+        try:
+            err = resp.json()
+            err_msg = err.get("error", {}).get("message", "")
+            if "role" in err_msg.lower() and "system" not in err_msg.lower().split("in")[0]:
+                pass  # not a role error
+            if "role" in err_msg.lower():
+                payload["messages"] = [
+                    {"role": "user", "content": f"{LLM_PROMPT}\n\n---\n\n{text}"},
+                ]
+                resp = http.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=300)
+        except Exception:
+            pass
+
     resp.raise_for_status()
     data = resp.json()
     content = data["choices"][0]["message"]["content"]
@@ -980,7 +1110,20 @@ def summarize_minimax(creds, text, base_url, model):
     url = f"{base_url}/chat/completions"
     if group_id:
         url += f"?GroupId={group_id}"
-    resp = http.post(url, headers=headers, json=payload, timeout=120)
+    resp = http.post(url, headers=headers, json=payload, timeout=300)
+
+    # Retry without system role if model doesn't support it
+    if resp.status_code == 400:
+        try:
+            err_msg = resp.json().get("error", {}).get("message", "")
+            if "role" in err_msg.lower():
+                payload["messages"] = [
+                    {"role": "user", "content": f"{LLM_PROMPT}\n\n---\n\n{text}"},
+                ]
+                resp = http.post(url, headers=headers, json=payload, timeout=300)
+        except Exception:
+            pass
+
     resp.raise_for_status()
     data = resp.json()
     content = data["choices"][0]["message"]["content"]
@@ -998,8 +1141,8 @@ def summarize_minimax(creds, text, base_url, model):
 def summarize_tencent(creds, text, model=""):
     """腾讯云 uses SecretId/SecretKey — route through their OpenAI-compatible endpoint."""
     api_key = creds.get("secret_key", "")
-    return summarize_openai_compatible(
-        {"api_key": api_key}, text,
+    return _summarize_with_chunking(
+        summarize_openai_compatible, {"api_key": api_key}, text,
         "https://api.lkeap.cloud.tencent.com/v1", model or "deepseek-v3"
     )
 
@@ -1011,15 +1154,15 @@ def summarize_aliyun(creds, text, model=""):
     # Strip /chat/completions if user pasted the full endpoint
     if base_url.endswith("/chat/completions"):
         base_url = base_url.rsplit("/chat/completions", 1)[0]
-    return summarize_openai_compatible(creds, text, base_url, model or "qwen-plus")
+    return _summarize_with_chunking(summarize_openai_compatible, creds, text, base_url, model or "qwen-plus")
 
 
 LLM_HANDLERS = {
-    "OpenAI":         lambda c, text, model="": summarize_openai_compatible(c, text, "https://api.openai.com/v1", model or "gpt-4o"),
-    "Groq":           lambda c, text, model="": summarize_openai_compatible(c, text, "https://api.groq.com/openai/v1", model or "llama-3.3-70b-versatile"),
-    "智谱":           lambda c, text, model="": summarize_openai_compatible(c, text, "https://open.bigmodel.cn/api/paas/v4", model or "glm-4-flash"),
-    "Minimax-CN":     lambda c, text, model="": summarize_minimax(c, text, "https://api.minimax.chat/v1", model or "MiniMax-Text-01"),
-    "Minimax-Global": lambda c, text, model="": summarize_minimax(c, text, "https://api.minimaxi.chat/v1", model or "MiniMax-Text-01"),
+    "OpenAI":         lambda c, text, model="": _summarize_with_chunking(summarize_openai_compatible, c, text, "https://api.openai.com/v1", model or "gpt-4o"),
+    "Groq":           lambda c, text, model="": _summarize_with_chunking(summarize_openai_compatible, c, text, "https://api.groq.com/openai/v1", model or "llama-3.3-70b-versatile"),
+    "智谱":           lambda c, text, model="": _summarize_with_chunking(summarize_openai_compatible, c, text, "https://open.bigmodel.cn/api/paas/v4", model or "glm-4-flash"),
+    "Minimax-CN":     lambda c, text, model="": _summarize_with_chunking(summarize_minimax, c, text, "https://api.minimax.chat/v1", model or "MiniMax-Text-01"),
+    "Minimax-Global": lambda c, text, model="": _summarize_with_chunking(summarize_minimax, c, text, "https://api.minimaxi.chat/v1", model or "MiniMax-Text-01"),
     "腾讯云":         summarize_tencent,
     "阿里云":         summarize_aliyun,
 }

@@ -209,8 +209,13 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 1.8rem; color: #1a1a2e; 
 .queue-item .qi-file { font-weight: 500; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
 .queue-item .qi-status { font-size: 0.75rem; }
 .queue-item .qi-time { font-size: 0.7rem; color: #aaa; white-space: nowrap; }
-.queue-item .qi-progress { background: #e9ecef; border-radius: 4px; height: 4px; overflow: hidden; margin-top: 4px; }
+.queue-item .qi-progress { background: #e9ecef; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
 .queue-item .qi-progress-bar { height: 100%; background: linear-gradient(90deg,#4361ee,#7c3aed); border-radius: 4px; transition: width 0.5s ease; }
+.queue-item .qi-detail { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.72rem; color: #888; }
+.queue-item .qi-steps { display: flex; gap: 4px; align-items: center; font-size: 0.7rem; color: #bbb; }
+.queue-item .qi-steps .step { padding: 1px 6px; border-radius: 3px; background: #f0f0f0; }
+.queue-item .qi-steps .step.active { background: #4361ee; color: #fff; }
+.queue-item .qi-steps .step.done { background: #e8f5e9; color: #2e7d32; }
 /* Task completion notification */
 .task-notify { background: #fff; border: 1px solid #c8e6c9; border-left: 4px solid #4caf50; border-radius: 8px; padding: 10px 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); cursor: pointer; animation: slideIn 0.3s ease; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .task-notify.error { border-color: #ffcdd2; border-left-color: #e53935; }
@@ -343,7 +348,12 @@ const i18n = {
     expandText: "▼ 展开",
     errorDetail: "错误信息",
     modelDefault: "-- 默认 --",
-    modelLoading: "加载模型中..."
+    modelLoading: "加载模型中...",
+    stepUpload: "上传",
+    stepTranscode: "转码",
+    stepAsr: "语音识别",
+    stepLlm: "会议纪要",
+    stepDone: "完成"
   },
   en: {
     title: "🎙️ VibeMeet2Notes · 灵感纪要",
@@ -427,7 +437,12 @@ const i18n = {
     expandText: "▼ Expand",
     errorDetail: "Error Details",
     modelDefault: "-- Default --",
-    modelLoading: "Loading models..."
+    modelLoading: "Loading models...",
+    stepUpload: "Upload",
+    stepTranscode: "Transcode",
+    stepAsr: "ASR",
+    stepLlm: "LLM",
+    stepDone: "Done"
   }
 };
 
@@ -692,6 +707,33 @@ function renderTokenUsage(usage) {
   return `<span>${t("modelLabel")}: ${usage.model || '—'} · ${t("inputLabel")}: ${usage.prompt_tokens || 0} ${t("tokensUnit")} · ${t("outputLabel")}: ${usage.completion_tokens || 0} ${t("tokensUnit")} · ${t("totalLabel")}: ${usage.total_tokens || 0} ${t("tokensUnit")}</span>`;
 }
 
+function renderQueueProgress(task) {
+  const step = task.currentStep || "";
+  const steps = [
+    { key: "upload", label: t("stepUpload") },
+    { key: "transcode", label: t("stepTranscode") },
+    { key: "asr", label: t("stepAsr") },
+    { key: "llm", label: t("stepLlm") },
+    { key: "done", label: t("stepDone") },
+  ];
+  const stepOrder = ["upload", "transcode", "asr", "llm", "done"];
+  const currentIdx = stepOrder.indexOf(step);
+  const stepsHtml = steps.map((s, i) => {
+    let cls = "";
+    if (i < currentIdx) cls = "done";
+    else if (i === currentIdx) cls = "active";
+    return `<span class="step ${cls}">${cls === "done" ? "✓" : ""} ${s.label}</span>`;
+  }).join("");
+  const pct = task.percent || 0;
+  const msg = task.message || "";
+  return `<div class="qi-progress"><div class="qi-progress-bar" style="width:${pct}%"></div></div>
+    <div class="qi-detail">
+      <div class="qi-steps">${stepsHtml}</div>
+      <span>${pct}%</span>
+    </div>
+    ${msg ? `<div style="font-size:0.72rem;color:#666;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(msg)}</div>` : ''}`;
+}
+
 function updateQueueUI() {
   const container = document.getElementById("task-queue-list");
   const card = document.getElementById("queue-card");
@@ -719,7 +761,7 @@ function updateQueueUI() {
           ${timeHtml}
         </span>
       </div>
-      ${task.status === 'running' ? `<div class="qi-progress"><div class="qi-progress-bar" style="width:${task.percent || 0}%"></div></div>` : ''}
+      ${task.status === 'running' || task.status === 'waiting' ? renderQueueProgress(task) : ''}
     </div>`;
   }).join("");
 }
@@ -869,6 +911,14 @@ function handleQueueSSE(qid, event, data) {
   if (event === "progress") {
     task.percent = data.percent;
     task.message = data.message;
+    // Track current step for step indicator
+    const stepName = data.step || "";
+    if (stepName === "upload") task.currentStep = "upload";
+    else if (stepName === "transcode" || stepName === "transcode_done") task.currentStep = "transcode";
+    else if (stepName === "asr" || stepName === "asr_done") task.currentStep = "asr";
+    else if (stepName === "llm" || stepName === "llm_done") task.currentStep = "llm";
+    if (stepName === "asr_done") task.currentStep = "asr";
+    if (stepName === "llm_done") task.currentStep = "llm";
     updateQueueUI();
     if (task._viewing) {
       const progressBar = document.getElementById("progress-bar");
@@ -894,6 +944,7 @@ function handleQueueSSE(qid, event, data) {
     task.status = "done";
     task.percent = 100;
     task.message = t("statusDone");
+    task.currentStep = "done";
     task.taskIdServer = data.task_id;
     task.completedAt = new Date().toLocaleString();
     if (data.token_usage) task.token_usage = data.token_usage;
@@ -909,6 +960,7 @@ function handleQueueSSE(qid, event, data) {
     task.completedAt = new Date().toLocaleString();
     updateQueueUI();
     showTaskNotification(qid, true);
+    loadTaskHistory();
   }
 }
 
